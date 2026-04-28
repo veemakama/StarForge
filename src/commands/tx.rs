@@ -16,14 +16,29 @@ pub enum TxCommands {
     Send(SendArgs),
     /// Fetch and display recent transactions for a Stellar account
     History {
+        /// Account public key
         public_key: String,
-
-        /// number of transactions
+        /// Number of transactions to fetch (max 200)
         #[arg(short, long, default_value_t = 10)]
         limit: u8,
-
+        /// Network to use
         #[arg(short, long)]
         network: Option<String>,
+        /// Pagination cursor (paging_token from previous result)
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Filter: only show transactions after this date (ISO 8601, e.g. 2024-01-01)
+        #[arg(long)]
+        after: Option<String>,
+        /// Filter: only show transactions before this date (ISO 8601, e.g. 2024-12-31)
+        #[arg(long)]
+        before: Option<String>,
+        /// Filter: only show successful transactions
+        #[arg(long)]
+        successful: bool,
+        /// Show full transaction details including memo
+        #[arg(long)]
+        details: bool,
     },
 }
 
@@ -56,7 +71,12 @@ pub fn handle(args: TxArgs) -> Result<()> {
             public_key,
             limit,
             network,
-        } => handle_history(public_key, limit, network),
+            cursor,
+            after,
+            before,
+            successful,
+            details,
+        } => handle_history(public_key, limit, network, cursor, after, before, successful, details),
     }
 }
 
@@ -214,8 +234,17 @@ fn parse_asset(asset: &str) -> Result<(Option<String>, Option<String>)> {
     }
 }
 
-fn handle_history(public_key: String, limit: u8, network_override: Option<String>) -> Result<()> {
-    let limit = limit.min(50);
+fn handle_history(
+    public_key: String,
+    limit: u8,
+    network_override: Option<String>,
+    cursor: Option<String>,
+    after: Option<String>,
+    before: Option<String>,
+    successful_only: bool,
+    details: bool,
+) -> Result<()> {
+    let limit = limit.min(200);
 
     config::validate_public_key(&public_key)?;
 
@@ -230,10 +259,34 @@ fn handle_history(public_key: String, limit: u8, network_override: Option<String
     println!("  {} {}", "◆".cyan().bold(), "Transaction History".white().bold());
     println!("  {} {}", "Account :".dimmed(), public_key.yellow());
     println!("  {} {}", "Network :".dimmed(), network.cyan());
-    println!("  {} {}", "Showing :".dimmed(), format!("last {} txs", limit).white());
+    println!("  {} {}", "Showing :".dimmed(), format!("up to {} txs", limit).white());
+
+    if after.is_some() || before.is_some() {
+        let range = format!(
+            "{} → {}",
+            after.as_deref().unwrap_or("*"),
+            before.as_deref().unwrap_or("*")
+        );
+        println!("  {} {}", "Range   :".dimmed(), range.white());
+    }
+    if successful_only {
+        println!("  {} {}", "Filter  :".dimmed(), "successful only".white());
+    }
+    if cursor.is_some() {
+        println!("  {} {}", "Cursor  :".dimmed(), "paginating from cursor".white());
+    }
+
     println!("  {}", "─".repeat(72).dimmed());
 
-    match horizon::fetch_transactions(&public_key, &network, limit) {
+    let filter = horizon::TxFilter {
+        limit,
+        cursor,
+        after,
+        before,
+        successful_only: if successful_only { Some(true) } else { None },
+    };
+
+    match horizon::fetch_transactions_filtered(&public_key, &network, filter) {
         Err(e) => {
             println!("\n  {} {}\n", "✗".red().bold(), e.to_string().red());
         }
@@ -241,15 +294,25 @@ fn handle_history(public_key: String, limit: u8, network_override: Option<String
             println!("\n  {} No transactions found for this account.\n", "!".yellow().bold());
         }
         Ok(txs) => {
-            print_transactions(&txs, &network);
+            print_transactions(&txs, &network, details);
         }
     }
 
     Ok(())
 }
 
-fn print_transactions(txs: &[horizon::TransactionRecord], network: &str) {
-    
+fn decode_memo(memo_type: Option<&str>, memo: Option<&str>) -> String {
+    match (memo_type, memo) {
+        (Some("text"), Some(m)) => format!("\"{}\"", m),
+        (Some("id"), Some(m)) => format!("id:{}", m),
+        (Some("hash"), Some(m)) => format!("hash:{}", &m[..m.len().min(16)]),
+        (Some("return"), Some(m)) => format!("return:{}", &m[..m.len().min(16)]),
+        (Some("none"), _) | (None, _) => "none".to_string(),
+        _ => "—".to_string(),
+    }
+}
+
+fn print_transactions(txs: &[horizon::TransactionRecord], network: &str, details: bool) {
     println!(
         "  {:<14}  {:<6}  {:<4}  {:<12}  {}",
         "Hash".dimmed(),
@@ -269,7 +332,6 @@ fn print_transactions(txs: &[horizon::TransactionRecord], network: &str) {
             "✗ fail".red().to_string()
         };
 
-        // returns fee in stroops; 1 XLM is equal to 10_000_000 stroops
         let fee_xlm = tx
             .fee_charged
             .parse::<f64>()
@@ -291,11 +353,30 @@ fn print_transactions(txs: &[horizon::TransactionRecord], network: &str) {
             fee_xlm.yellow(),
             ts.dimmed(),
         );
+
+        if details {
+            if let Some(ref src) = tx.source_account {
+                println!("  {:<14}  {}", "".dimmed(), format!("src: {}…", &src[..16]).dimmed());
+            }
+            let memo = decode_memo(tx.memo_type.as_deref(), tx.memo.as_deref());
+            println!("  {:<14}  {}", "".dimmed(), format!("memo: {}", memo).dimmed());
+        }
     }
 
     println!("  {}", "─".repeat(72).dimmed());
 
-    // footer === Stellar Expert deep link
+    // Pagination hint
+    if let Some(last) = txs.last() {
+        if let Some(ref token) = last.paging_token {
+            println!(
+                "\n  {} {}",
+                "Next page:".dimmed(),
+                format!("--cursor {}", token).cyan()
+            );
+        }
+    }
+
+    // Explorer deep link
     let explorer_base = if network == "mainnet" {
         "https://stellar.expert/explorer/public/tx"
     } else {

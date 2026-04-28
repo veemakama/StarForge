@@ -53,13 +53,17 @@ pub fn check_network(network: &str) -> bool {
     ureq::get(&url).call().map(|r| r.status() == 200).unwrap_or(false)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TransactionRecord {
     pub hash: String,
     pub successful: bool,
     pub operation_count: u32,
     pub fee_charged: String,
     pub created_at: String,
+    pub memo_type: Option<String>,
+    pub memo: Option<String>,
+    pub source_account: Option<String>,
+    pub paging_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,17 +77,45 @@ struct TransactionsEmbedded {
     records: Vec<TransactionRecord>,
 }
 
+pub struct TxFilter {
+    pub limit: u8,
+    pub cursor: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub successful_only: Option<bool>,
+}
+
+#[allow(dead_code)]
 pub fn fetch_transactions(
     public_key: &str,
     network: &str,
     limit: u8,
 ) -> Result<Vec<TransactionRecord>> {
-    let url = format!(
+    fetch_transactions_filtered(public_key, network, TxFilter {
+        limit,
+        cursor: None,
+        after: None,
+        before: None,
+        successful_only: None,
+    })
+}
+
+pub fn fetch_transactions_filtered(
+    public_key: &str,
+    network: &str,
+    filter: TxFilter,
+) -> Result<Vec<TransactionRecord>> {
+    let limit = filter.limit.min(200);
+    let mut url = format!(
         "{}/accounts/{}/transactions?order=desc&limit={}",
         horizon_url(network),
         public_key,
         limit
     );
+
+    if let Some(ref cursor) = filter.cursor {
+        url.push_str(&format!("&cursor={}", cursor));
+    }
 
     let res = ureq::get(&url).call().with_context(|| {
         format!(
@@ -96,7 +128,20 @@ pub fn fetch_transactions(
         .into_json()
         .with_context(|| "Failed to parse transactions response")?;
 
-    Ok(parsed.embedded.records)
+    let mut records = parsed.embedded.records;
+
+    // Client-side date filtering (Horizon doesn't support date range natively)
+    if let Some(ref after) = filter.after {
+        records.retain(|tx| tx.created_at.as_str() >= after.as_str());
+    }
+    if let Some(ref before) = filter.before {
+        records.retain(|tx| tx.created_at.as_str() <= before.as_str());
+    }
+    if let Some(successful_only) = filter.successful_only {
+        records.retain(|tx| tx.successful == successful_only);
+    }
+
+    Ok(records)
 }
 
 #[derive(Debug, Deserialize)]
