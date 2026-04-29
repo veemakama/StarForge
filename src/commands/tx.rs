@@ -76,7 +76,16 @@ pub fn handle(args: TxArgs) -> Result<()> {
             before,
             successful,
             details,
-        } => handle_history(public_key, limit, network, cursor, after, before, successful, details),
+        } => handle_history(HistoryArgs {
+            public_key,
+            limit,
+            network_override: network,
+            cursor,
+            after,
+            before,
+            successful_only: successful,
+            details,
+        }),
     }
 }
 
@@ -234,7 +243,7 @@ fn parse_asset(asset: &str) -> Result<(Option<String>, Option<String>)> {
     }
 }
 
-fn handle_history(
+struct HistoryArgs {
     public_key: String,
     limit: u8,
     network_override: Option<String>,
@@ -243,12 +252,14 @@ fn handle_history(
     before: Option<String>,
     successful_only: bool,
     details: bool,
-) -> Result<()> {
-    let limit = limit.min(200);
+}
 
-    config::validate_public_key(&public_key)?;
+fn handle_history(args: HistoryArgs) -> Result<()> {
+    let limit = args.limit.min(200);
 
-    let network = network_override.unwrap_or_else(|| {
+    config::validate_public_key(&args.public_key)?;
+
+    let network = args.network_override.unwrap_or_else(|| {
         config::load()
             .map(|c| c.network)
             .unwrap_or_else(|_| "testnet".to_string())
@@ -257,22 +268,22 @@ fn handle_history(
 
     println!();
     println!("  {} {}", "◆".cyan().bold(), "Transaction History".white().bold());
-    println!("  {} {}", "Account :".dimmed(), public_key.yellow());
+    println!("  {} {}", "Account :".dimmed(), args.public_key.yellow());
     println!("  {} {}", "Network :".dimmed(), network.cyan());
     println!("  {} {}", "Showing :".dimmed(), format!("up to {} txs", limit).white());
 
-    if after.is_some() || before.is_some() {
+    if args.after.is_some() || args.before.is_some() {
         let range = format!(
             "{} → {}",
-            after.as_deref().unwrap_or("*"),
-            before.as_deref().unwrap_or("*")
+            args.after.as_deref().unwrap_or("*"),
+            args.before.as_deref().unwrap_or("*")
         );
         println!("  {} {}", "Range   :".dimmed(), range.white());
     }
-    if successful_only {
+    if args.successful_only {
         println!("  {} {}", "Filter  :".dimmed(), "successful only".white());
     }
-    if cursor.is_some() {
+    if args.cursor.is_some() {
         println!("  {} {}", "Cursor  :".dimmed(), "paginating from cursor".white());
     }
 
@@ -280,13 +291,13 @@ fn handle_history(
 
     let filter = horizon::TxFilter {
         limit,
-        cursor,
-        after,
-        before,
-        successful_only: if successful_only { Some(true) } else { None },
+        cursor: args.cursor,
+        after: args.after,
+        before: args.before,
+        successful_only: if args.successful_only { Some(true) } else { None },
     };
 
-    match horizon::fetch_transactions_filtered(&public_key, &network, filter) {
+    match horizon::fetch_transactions_filtered(&args.public_key, &network, filter) {
         Err(e) => {
             println!("\n  {} {}\n", "✗".red().bold(), e.to_string().red());
         }
@@ -294,7 +305,7 @@ fn handle_history(
             println!("\n  {} No transactions found for this account.\n", "!".yellow().bold());
         }
         Ok(txs) => {
-            print_transactions(&txs, &network, details);
+            print_transactions(&txs, &network, args.details);
         }
     }
 

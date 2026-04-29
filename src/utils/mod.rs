@@ -2,6 +2,7 @@ pub mod config;
 pub mod crypto;
 pub mod hardware_wallet;
 pub mod horizon;
+pub mod logging;
 pub mod multisig;
 pub mod mock_soroban;
 pub mod notifications;

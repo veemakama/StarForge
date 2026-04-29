@@ -19,6 +19,14 @@ struct Cli {
     /// Suppress the ASCII banner and decorative output
     #[arg(long, short = 'q', global = true)]
     quiet: bool,
+
+    /// Log output format: human (default) or json
+    #[arg(long, global = true, default_value = "human", value_parser = ["human", "json"])]
+    log_format: String,
+
+    /// Directory to write rotating log files into (optional)
+    #[arg(long, global = true)]
+    log_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -80,6 +88,15 @@ enum Commands {
 
 fn main() {
     let cli = Cli::parse();
+
+    // Initialise structured logging before anything else runs.
+    let log_cfg = utils::logging::config_from_env(
+        Some(cli.log_format.as_str()),
+        cli.log_dir.clone(),
+    );
+    if let Err(e) = utils::logging::init(log_cfg) {
+        eprintln!("Warning: failed to initialise logger: {}", e);
+    }
 
     if !cli.quiet {
         print_banner();
