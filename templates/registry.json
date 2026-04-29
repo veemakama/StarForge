@@ -1,0 +1,39 @@
+{
+  "templates": [
+    {
+      "name": "uniswap-v2",
+      "description": "Automated market maker contract template for token swaps.",
+      "version": "0.1.0",
+      "source": "marketplace",
+      "tags": ["defi", "amm", "swap"]
+    },
+    {
+      "name": "hello-world",
+      "description": "Baseline Soroban contract template for simple greeting and storage.",
+      "version": "0.1.0",
+      "source": "official",
+      "tags": ["starter", "example"]
+    },
+    {
+      "name": "token",
+      "description": "ERC-20-style token contract template with minting and transfer.",
+      "version": "0.1.0",
+      "source": "official",
+      "tags": ["token", "finance"]
+    },
+    {
+      "name": "voting",
+      "description": "Governance contract template for proposals and voting.",
+      "version": "0.1.0",
+      "source": "official",
+      "tags": ["governance", "voting"]
+    },
+    {
+      "name": "nft",
+      "description": "NFT contract template with minting, transfer, and metadata.",
+      "version": "0.1.0",
+      "source": "official",
+      "tags": ["nft", "collectible"]
+    }
+  ]
+}

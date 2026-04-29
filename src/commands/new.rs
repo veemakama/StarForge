@@ -1,4 +1,5 @@
 use crate::utils::print as p;
+use crate::utils::templates;
 use anyhow::Result;
 use clap::Subcommand;
 use colored::*;
@@ -11,11 +12,17 @@ pub enum NewCommands {
     /// Scaffold a new Soroban smart contract project
     Contract {
         /// Project name
-        name: String,
+        #[arg(required_unless_present = "search")]
+        name: Option<String>,
         /// Contract template
-        #[arg(long, default_value = "hello-world",
-              value_parser = ["hello-world", "token", "nft", "voting"])]
+        #[arg(long, default_value = "hello-world")]
         template: String,
+        /// Template source label (example: marketplace)
+        #[arg(long)]
+        from: Option<String>,
+        /// Search available templates
+        #[arg(long)]
+        search: Option<String>,
         /// Interactively customize the generated contract
         #[arg(long)]
         interactive: bool,
@@ -29,15 +36,50 @@ pub enum NewCommands {
 
 pub fn handle(cmd: NewCommands) -> Result<()> {
     match cmd {
-        NewCommands::Contract { name, template, interactive } => {
+        NewCommands::Contract { name, template, from, search, interactive } => {
+            if let Some(query) = search {
+                return search_templates(&query);
+            }
+            let name = name.ok_or_else(|| anyhow::anyhow!("A contract name is required unless --search is used"))?;
             if interactive {
                 scaffold_contract_interactive(name)
             } else {
-                scaffold_contract(name, template, "MIT", "", "none", true)
+                scaffold_contract(
+                    name,
+                    template,
+                    from.as_deref().unwrap_or("official"),
+                    "MIT",
+                    "",
+                    "none",
+                    true,
+                )
             }
         }
         NewCommands::Dapp { name } => scaffold_dapp(name),
     }
+}
+
+fn search_templates(query: &str) -> Result<()> {
+    let results = templates::search_templates(query)?;
+    p::header(&format!("Template search results for '{}'", query));
+    if results.is_empty() {
+        p::info("No templates matched that query.");
+        return Ok(());
+    }
+
+    for (i, entry) in results.iter().enumerate() {
+        println!("  {:>2}. {}@{}", i + 1, entry.name, entry.version);
+        p::kv("Description", &entry.description);
+        p::kv("Source", &entry.source);
+        if !entry.tags.is_empty() {
+            p::kv("Tags", &entry.tags.join(", "));
+        }
+        if i + 1 < results.len() {
+            println!();
+        }
+    }
+
+    Ok(())
 }
 
 // ── Interactive mode ──────────────────────────────────────────────────────────
@@ -117,6 +159,7 @@ fn scaffold_contract_interactive(default_name: String) -> Result<()> {
     scaffold_contract(
         opts.name,
         "hello-world".to_string(), // template base; content is overridden by opts
+        "official",
         &opts.license,
         &opts.author,
         &opts.storage,
@@ -127,6 +170,7 @@ fn scaffold_contract_interactive(default_name: String) -> Result<()> {
 fn scaffold_contract(
     name: String,
     template: String,
+    source: &str,
     license: &str,
     author: &str,
     storage: &str,
@@ -151,15 +195,26 @@ fn scaffold_contract(
 
     p::step(3, 4, &format!("Generating '{}' contract source…", template));
     let src = match template.as_str() {
-        "token"  => token_template(&name),
+        "token" => token_template(&name),
         "voting" => voting_template(&name),
-        "nft"    => nft_template(&name),
-        _        => hello_world_template(&name, storage, include_tests),
+        "nft" => nft_template(&name),
+        _ => {
+            if let Some(custom) = templates::template_source_content(&template)? {
+                custom
+            } else if template == "hello-world" {
+                hello_world_template(&name, storage, include_tests)
+            } else {
+                anyhow::bail!(
+                    "Unknown template '{}'. Search available templates with `starforge new contract --search <query>`.",
+                    template
+                );
+            }
+        }
     };
     fs::write(dir.join("src/lib.rs"), src)?;
 
     p::step(4, 4, "Writing README.md…");
-    fs::write(dir.join("README.md"), readme(&name, &template))?;
+    fs::write(dir.join("README.md"), readme(&name, &template, source))?;
 
     println!();
     p::success(&format!("Contract '{}' scaffolded!", name));
@@ -756,7 +811,7 @@ npm run dev
 "#)
 }
 
-fn readme(name: &str, template: &str) -> String {
+fn readme(name: &str, template: &str, source: &str) -> String {
     format!(r#"# {name}
 
 A Soroban smart contract scaffolded with [starforge](https://github.com/YOUR_USERNAME/starforge).
@@ -782,5 +837,6 @@ starforge deploy \
 ```
 
 Template: `{template}`
-"#, name = name, snake = name.replace('-', "_"), template = template)
+Source: `{source}`
+"#, name = name, snake = name.replace('-', "_"), template = template, source = source)
 }
