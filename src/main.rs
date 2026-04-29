@@ -37,9 +37,12 @@ enum Commands {
     /// Generate Soroban project boilerplate
     #[command(subcommand)]
     New(commands::new::NewCommands),
-    /// Contract operations (invoke, etc.)
+    /// Contract operations (invoke, inspect, etc.)
     #[command(subcommand)]
     Contract(commands::contract::ContractCommands),
+    /// Deep contract storage inspection (state, key, storage)
+    #[command(subcommand)]
+    Inspect(commands::inspect::InspectCommands),
     /// Deploy a compiled Soroban contract (.wasm)
     Deploy(commands::deploy::DeployArgs),
     /// Show starforge config and environment info
@@ -103,6 +106,7 @@ fn main() {
         Commands::Wallet(_) => "wallet",
         Commands::New(_) => "new",
         Commands::Contract(_) => "contract",
+        Commands::Inspect(_) => "inspect",
         Commands::Deploy(_) => "deploy",
         Commands::Info => "info",
         Commands::Tx(_) => "tx",
@@ -123,6 +127,7 @@ fn main() {
         Commands::Wallet(cmd)  => commands::wallet::handle(cmd),
         Commands::New(cmd)     => commands::new::handle(cmd),
         Commands::Contract(cmd) => commands::contract::handle(cmd),
+        Commands::Inspect(cmd)  => commands::inspect::handle(cmd),
         Commands::Deploy(args) => commands::deploy::handle(args),
         Commands::Info         => commands::info::handle(),
         Commands::Tx(args) => commands::tx::handle(args),

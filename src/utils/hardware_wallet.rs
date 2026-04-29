@@ -26,7 +26,6 @@ pub struct HardwareWalletInfo {
     #[allow(dead_code)]
     pub kind: HardwareWalletKind,
     pub device_count: usize,
-    /// Stellar public key derived at STELLAR_HD_PATH (when available)
     #[allow(dead_code)]
     pub stellar_address: Option<String>,
     pub hd_path: String,

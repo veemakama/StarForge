@@ -3,6 +3,7 @@ pub mod contract;
 pub mod deploy;
 pub mod gas;
 pub mod info;
+pub mod inspect;
 pub mod invoke;
 pub mod monitor;
 pub mod network;

@@ -26,7 +26,7 @@ enum Commands {
 fn main() {
     let _outdir = match env::var_os("OUT_DIR") {
         None => return,
-        Some(outdir) => outdir,
+        Some(_outdir) => _outdir,
     };
 
     let mut cmd = Cli::command();
