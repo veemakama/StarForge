@@ -249,6 +249,10 @@ fn get_rpc_url(network: &str) -> String {
     }
 }
 
+pub fn rpc_url(network: &str) -> String {
+    get_rpc_url(network)
+}
+
 fn rpc_request_with_url<T>(rpc_url: &str, request: SorobanRpcRequest) -> Result<T>
 where
     T: DeserializeOwned,

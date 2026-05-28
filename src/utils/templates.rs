@@ -63,6 +63,29 @@ impl std::fmt::Display for TemplateSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TemplateSource {
+    Git { url: String, branch: Option<String> },
+    Local { path: String },
+    Builtin { id: String },
+}
+
+impl std::fmt::Display for TemplateSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TemplateSource::Git { url, branch } => {
+                if let Some(branch) = branch {
+                    write!(f, "git:{}@{}", url, branch)
+                } else {
+                    write!(f, "git:{}", url)
+                }
+            }
+            TemplateSource::Local { path } => write!(f, "local:{}", path),
+            TemplateSource::Builtin { id } => write!(f, "builtin:{}", id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateEntry {
     pub name: String,
     pub description: String,

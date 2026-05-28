@@ -1,6 +1,10 @@
-use crate::utils::{config, horizon, notifications, print as p, stream::SorobanEventStream};
+use crate::utils::{config, horizon, notifications, print as p, soroban, stream::SorobanEventStream};
 use anyhow::Result;
 use clap::Args;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Args)]
 pub struct MonitorArgs {
@@ -11,6 +15,10 @@ pub struct MonitorArgs {
     /// Comma-separated list of event names to filter (best-effort; matches topic strings)
     #[arg(long)]
     pub events: Option<String>,
+
+    /// Stream events continuously until Ctrl+C (contract mode)
+    #[arg(long)]
+    pub follow: bool,
 
     /// Wallet name from starforge config to monitor
     #[arg(long)]
@@ -56,6 +64,7 @@ fn monitor_contract(
     events_filter: Option<&str>,
     network: &str,
     interval: u64,
+    follow: bool,
 ) -> Result<()> {
     config::validate_contract_id(contract_id)?;
 
@@ -66,15 +75,10 @@ fn monitor_contract(
             .collect()
     });
 
-    let rpc_url = match network {
-        "mainnet" => "https://mainnet.sorobanrpc.com",
-        "docker-testnet" => "http://localhost:8000/rpc",
-        _ => "https://soroban-testnet.stellar.org",
-    }
-    .to_string();
+    let rpc_url = soroban::rpc_url(network);
 
     notifications::info(&format!(
-        "Streaming contract events from {} (best-effort polling).",
+        "Streaming contract events from {}.",
         rpc_url
     ));
 
@@ -91,18 +95,32 @@ fn monitor_contract(
                         matches = true;
                         break;
                     }
+                    printed_any = true;
+                    notifications::success(&format!(
+                        "Ledger {} event {}: {}",
+                        event.ledger, event.id, as_text
+                    ));
                 }
-                if !matches {
-                    continue;
+
+                if !follow {
+                    break;
                 }
+                stream.sleep();
             }
-            notifications::success(&format!(
-                "Ledger {} event {}: {}",
-                event.ledger, event.id, as_text
-            ));
+            Err(err) => {
+                if !follow && !printed_any {
+                    return Err(err);
+                }
+                notifications::warn(&format!(
+                    "Event stream error: {}. Reconnecting with backoff…",
+                    err
+                ));
+                stream.sleep_backoff();
+            }
         }
-        stream.sleep();
     }
+
+    Ok(())
 }
 
 fn monitor_wallet(

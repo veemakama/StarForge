@@ -17,15 +17,15 @@ pub enum NewCommands {
         /// Contract template
         #[arg(long, default_value = "hello-world")]
         template: String,
+        /// Interactively customize the generated contract
+        #[arg(long)]
+        interactive: bool,
         /// Template source label (example: marketplace)
         #[arg(long)]
         from: Option<String>,
         /// Search available templates
         #[arg(long)]
         search: Option<String>,
-        /// Interactively customize the generated contract
-        #[arg(long)]
-        interactive: bool,
         /// Filter templates by tags (comma-separated)
         #[arg(long)]
         tags: Option<String>,
@@ -34,6 +34,12 @@ pub enum NewCommands {
     Dapp {
         /// Project name
         name: String,
+        /// Generate TypeScript sources (tsx) instead of JavaScript (jsx)
+        #[arg(long)]
+        typescript: bool,
+        /// Include Stellar Wallets Kit integration scaffolding
+        #[arg(long)]
+        wallet_kit: bool,
     },
 }
 
@@ -48,7 +54,7 @@ pub fn handle(cmd: NewCommands) -> Result<()> {
             tags,
         } => {
             if let Some(query) = search {
-                return search_templates(&query, tags.as_deref());
+                return handle_template_search(&query, tags.as_deref());
             }
             let name = name.ok_or_else(|| {
                 anyhow::anyhow!("A contract name is required unless --search is used")
@@ -67,19 +73,16 @@ pub fn handle(cmd: NewCommands) -> Result<()> {
                 )
             }
         }
-        NewCommands::Dapp { name } => scaffold_dapp(name),
+        NewCommands::Dapp {
+            name,
+            typescript,
+            wallet_kit,
+        } => scaffold_dapp(name, typescript, wallet_kit),
     }
 }
 
-fn search_templates(query: &str, tags: Option<&str>) -> Result<()> {
-    let tag_list: Option<Vec<String>> = tags.map(|t| {
-        t.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    });
-
-    let results = templates::search_templates(query, tag_list.as_deref())?;
+fn search_templates(query: &str) -> Result<()> {
+    let results = templates::search_templates(query, None)?;
     p::header(&format!("Template search results for '{}'", query));
 
     if let Some(ref tags) = tag_list {
@@ -269,20 +272,45 @@ fn scaffold_contract(
     Ok(())
 }
 
-fn scaffold_dapp(name: String) -> Result<()> {
+fn scaffold_dapp(name: String, typescript: bool, wallet_kit: bool) -> Result<()> {
     let dir = Path::new(&name);
     if dir.exists() {
         anyhow::bail!("Directory '{}' already exists", name);
     }
 
     p::header(&format!("Scaffolding Stellar dApp: {}", name));
+    if typescript {
+        p::kv("TypeScript", "enabled");
+    }
+    if wallet_kit {
+        p::kv("Stellar Wallets Kit", "enabled");
+    }
+    println!();
 
-    p::step(1, 3, "Creating project structure…");
+    let ext = if typescript { "tsx" } else { "jsx" };
+    let total_steps = if typescript { 4 } else { 3 };
+
+    p::step(1, total_steps, "Creating project structure…");
     fs::create_dir_all(dir.join("src/components"))?;
     fs::create_dir_all(dir.join("public"))?;
 
-    p::step(2, 3, "Writing package.json…");
-    fs::write(dir.join("package.json"), dapp_package(&name))?;
+    p::step(2, total_steps, "Writing package.json…");
+    fs::write(
+        dir.join("package.json"),
+        dapp_package(&name, typescript, wallet_kit),
+    )?;
+
+    let mut step = 3;
+    if typescript {
+        p::step(step, total_steps, "Writing TypeScript config…");
+        fs::write(dir.join("tsconfig.json"), dapp_tsconfig())?;
+        fs::write(dir.join("tsconfig.node.json"), dapp_tsconfig_node())?;
+        fs::write(
+            dir.join(format!("src/vite-env.d.ts")),
+            dapp_vite_env_types(wallet_kit),
+        )?;
+        step += 1;
+    }
 
     p::step(3, 3, "Writing app scaffold…");
     fs::write(dir.join("index.html"), dapp_index(&name))?;
@@ -989,14 +1017,17 @@ fn dapp_package(name: &str) -> String {
     "build": "vite build",
     "preview": "vite preview"
   }},
+  "env": {{
+{env_block}
+  }},
   "dependencies": {{
     "@stellar/stellar-sdk": "^12.3.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0"{wallet_deps}
   }},
   "devDependencies": {{
     "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0"{ts_deps}
   }}
 }}
 "#
@@ -1014,22 +1045,49 @@ fn dapp_index(name: &str) -> String {
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.{main_ext}"></script>
   </body>
 </html>
 "#
     )
 }
 
-fn dapp_main() -> &'static str {
-    r#"import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
+fn dapp_main(typescript: bool, wallet_kit: bool) -> String {
+    let app_import = if typescript { "./App.tsx" } else { "./App.jsx" };
+    let root_el = if typescript {
+        "document.getElementById('root')!"
+    } else {
+        "document.getElementById('root')"
+    };
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+    let mut out = format!(
+        r#"import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from '{app_import}'
+"#
+    );
+
+    if wallet_kit {
+        out.push_str(
+            r#"import { StellarWalletsKit } from '@creit.tech/stellar-wallets-kit/sdk'
+import { defaultModules } from '@creit.tech/stellar-wallets-kit/modules/utils'
+import { Networks } from '@stellar/stellar-sdk'
+
+StellarWalletsKit.init({ modules: defaultModules() })
+StellarWalletsKit.setNetwork(Networks.TESTNET)
+
+"#,
+        );
+    }
+
+    out.push_str(&format!(
+        r#"ReactDOM.createRoot({root_el}).render(
   <React.StrictMode><App /></React.StrictMode>
 )
 "#
+    ));
+
+    out
 }
 
 fn dapp_app(name: &str) -> String {
@@ -1041,6 +1099,7 @@ export default function App() {{
     <div style={{{{ fontFamily: 'monospace', padding: '2rem' }}}}>
       <h1>⚡ {name}</h1>
       <p>Your Stellar dApp is ready. Start building!</p>
+      <p>Network: {network_expr}</p>
     </div>
   )
 }}
@@ -1053,6 +1112,9 @@ fn dapp_readme(name: &str) -> String {
         r#"# {name}
 
 A Stellar dApp scaffolded with [starforge](https://github.com/YOUR_USERNAME/starforge).
+
+Testnet settings are defined in `package.json` under the `env` key and exposed to Vite via `vite.config.{ext}`.
+{flags}
 
 ## Getting Started
 

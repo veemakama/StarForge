@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rand::Rng;
 use serde::Deserialize;
 use std::thread;
 use std::time::Duration;
@@ -9,6 +10,7 @@ pub struct SorobanEventStream {
     contract_id: String,
     cursor: Option<String>,
     poll_interval: Duration,
+    backoff: Backoff,
 }
 
 impl SorobanEventStream {
@@ -18,6 +20,7 @@ impl SorobanEventStream {
             contract_id,
             cursor: None,
             poll_interval: Duration::from_secs(2),
+            backoff: Backoff::default(),
         }
     }
 
@@ -65,11 +68,16 @@ impl SorobanEventStream {
             .ok_or_else(|| anyhow::anyhow!("Soroban RPC getEvents returned no result"))?;
 
         self.cursor = result.cursor;
+        self.backoff.reset();
         Ok(result.events)
     }
 
     pub fn sleep(&self) {
         thread::sleep(self.poll_interval);
+    }
+
+    pub fn sleep_backoff(&mut self) {
+        thread::sleep(self.backoff.next_delay());
     }
 }
 
