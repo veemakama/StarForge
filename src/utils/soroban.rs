@@ -75,6 +75,31 @@ struct RpcLedgerEntry {
     live_until_ledger_seq: Option<u32>,
 }
 
+/// Unified entry-point used by both `commands::contract` and `commands::invoke`.
+///
+/// When `wallet` is `None` the call simulates only; when `Some` it simulates
+/// then submits and returns a `TransactionResult`.
+pub struct InvokeOutcome {
+    pub simulation: SimulationResult,
+    pub transaction: Option<TransactionResult>,
+}
+
+pub fn invoke_contract(
+    contract_id: &str,
+    function: &str,
+    args: &[String],
+    arg_types: &[String],
+    network: &str,
+    wallet: Option<&WalletEntry>,
+) -> Result<InvokeOutcome> {
+    let simulation = simulate_transaction(contract_id, function, args, arg_types, network)?;
+    let transaction = match wallet {
+        Some(w) => Some(submit_transaction(contract_id, function, args, arg_types, network, w)?),
+        None => None,
+    };
+    Ok(InvokeOutcome { simulation, transaction })
+}
+
 pub fn simulate_transaction(
     contract_id: &str,
     function: &str,
@@ -605,5 +630,74 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Expected a Stellar contract strkey"));
+    }
+
+    // ── ScVal arg encoding ──────────────────────────────────────────────
+
+    #[test]
+    fn encode_string_arg() {
+        let result = encode_arguments(&["hello".to_string()], &["string".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("hello"), "encoded string should contain the value");
+    }
+
+    #[test]
+    fn encode_symbol_arg() {
+        let result = encode_arguments(&["transfer".to_string()], &["symbol".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("transfer"));
+    }
+
+    #[test]
+    fn encode_int_arg() {
+        let result = encode_arguments(&["42".to_string()], &["int".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("42"));
+    }
+
+    #[test]
+    fn encode_bool_true_arg() {
+        let result = encode_arguments(&["true".to_string()], &["bool".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("true"));
+    }
+
+    #[test]
+    fn encode_bool_false_arg() {
+        let result = encode_arguments(&["false".to_string()], &["bool".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("false"));
+    }
+
+    #[test]
+    fn encode_multiple_args() {
+        let args = vec!["hello".to_string(), "99".to_string(), "true".to_string()];
+        let types = vec!["string".to_string(), "int".to_string(), "bool".to_string()];
+        let result = encode_arguments(&args, &types).unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn encode_empty_args() {
+        let result = encode_arguments(&[], &[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn encode_invalid_type_errors() {
+        let err = encode_arguments(&["x".to_string()], &["unknown_type".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("Unsupported argument type"));
+    }
+
+    #[test]
+    fn encode_invalid_int_errors() {
+        let err = encode_arguments(&["not_a_number".to_string()], &["int".to_string()]).unwrap_err();
+        assert!(err.to_string().len() > 0);
+    }
+
+    #[test]
+    fn encode_invalid_bool_errors() {
+        let err = encode_arguments(&["maybe".to_string()], &["bool".to_string()]).unwrap_err();
+        assert!(err.to_string().len() > 0);
     }
 }
