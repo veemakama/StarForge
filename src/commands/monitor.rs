@@ -1,4 +1,7 @@
-use crate::utils::{config, horizon, notifications, print as p, soroban, stream::SorobanEventStream};
+use crate::utils::{
+    config, horizon, notifications, print as p, soroban,
+    stream::{EventStreamFilters, SorobanEventStream},
+};
 use anyhow::Result;
 use clap::Args;
 use std::sync::{
@@ -65,12 +68,23 @@ pub fn handle(args: MonitorArgs) -> Result<()> {
     println!();
 
     match (&args.contract, &args.wallet) {
-        (Some(contract_id), None) => {
-            monitor_contract(contract_id, args.events.as_deref(), network, args.interval)
-        }
-        (None, Some(wallet_name)) => {
-            monitor_wallet(wallet_name, args.threshold, network, args.interval)
-        }
+        (Some(contract_id), None) => monitor_contract(
+            contract_id,
+            args.events.as_deref(),
+            args.event_type.as_deref(),
+            args.topic.as_deref(),
+            args.value.as_deref(),
+            network,
+            args.interval,
+            args.follow,
+        ),
+        (None, Some(wallet_name)) => monitor_wallet(
+            wallet_name,
+            args.threshold,
+            args.balance_alert,
+            network,
+            args.interval,
+        ),
         _ => anyhow::bail!("Specify either --contract or --wallet (but not both)"),
     }
 }
