@@ -35,7 +35,7 @@ indicatif = "0.17.7"
 libloading = "0.8.1"
 uuid = { version = "1.6.1", features = ["v4"] }
 hidapi = { version = "2.6.5", optional = true }
-hex = "0.4.3"
+zxcvbn = "=3.1.0"
 sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }

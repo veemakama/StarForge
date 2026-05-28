@@ -1,3 +1,4 @@
+use crate::plugins::interface::CORE_VERSION;
 use crate::plugins::{registry, PluginManager};
 use crate::utils::print as p;
 use anyhow::{Context, Result};
@@ -58,6 +59,7 @@ fn list() -> Result<()> {
         return Ok(());
     }
 
+    p::kv("StarForge core version", CORE_VERSION);
     p::separator();
     for (i, pl) in reg.plugins.iter().enumerate() {
         println!("  {:>2}. {}", i + 1, pl.name);
@@ -93,9 +95,11 @@ fn load() -> Result<()> {
         return Ok(());
     }
 
+    p::kv("StarForge core version", CORE_VERSION);
     p::separator();
-    for (name, desc) in loaded {
+    for (name, desc, built_for) in loaded {
         p::kv_accent(name, desc);
+        p::kv("Built for StarForge", built_for);
     }
     p::separator();
     Ok(())

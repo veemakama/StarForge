@@ -18,6 +18,8 @@ pub enum UpgradeCommands {
     Propose(ProposeArgs),
     /// List pending upgrade proposals
     List(ListArgs),
+    /// Show status of upgrade proposals (alias for list)
+    Status(ListArgs),
     /// Approve a pending upgrade proposal
     Approve(ApproveArgs),
     /// Execute an approved upgrade proposal
@@ -272,6 +274,7 @@ pub fn handle(cmd: UpgradeCommands) -> Result<()> {
         UpgradeCommands::Prepare(args) => handle_prepare(args),
         UpgradeCommands::Propose(args) => handle_propose(args),
         UpgradeCommands::List(args) => handle_list(args),
+        UpgradeCommands::Status(args) => handle_list(args), // Alias for list
         UpgradeCommands::Approve(args) => handle_approve(args),
         UpgradeCommands::Execute(args) => handle_execute(args),
         UpgradeCommands::Rollback(args) => handle_rollback(args),

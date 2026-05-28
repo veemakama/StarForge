@@ -4,16 +4,99 @@ Complete guide for developers contributing to or extending StarForge.
 
 ## Table of Contents
 
-1. [Getting Started](#getting-started)
-2. [Development Setup](#development-setup)
-3. [Project Structure](#project-structure)
-4. [Code Style Guide](#code-style-guide)
-5. [Adding New Features](#adding-new-features)
-6. [Testing](#testing)
-7. [Documentation](#documentation)
-8. [Common Tasks](#common-tasks)
-9. [Debugging](#debugging)
-10. [Release Process](#release-process)
+1. [Plugin Version Compatibility](#plugin-version-compatibility)
+2. [Getting Started](#getting-started)
+3. [Development Setup](#development-setup)
+4. [Project Structure](#project-structure)
+5. [Code Style Guide](#code-style-guide)
+6. [Adding New Features](#adding-new-features)
+7. [Testing](#testing)
+8. [Documentation](#documentation)
+9. [Common Tasks](#common-tasks)
+10. [Debugging](#debugging)
+11. [Release Process](#release-process)
+
+---
+
+## Plugin Version Compatibility
+
+StarForge enforces version compatibility when loading plugins to prevent subtle
+runtime failures caused by ABI or API mismatches.
+
+### How it works
+
+Every plugin shared library must export a `PLUGIN_DECLARATION` symbol (provided
+automatically by the `export_plugin!` macro).  When `starforge plugin load` runs,
+the loader checks two fields in that declaration:
+
+| Field | What is checked | Failure behaviour |
+|---|---|---|
+| `rustc_version` | Must match the exact rustc version used to build StarForge | Hard error — load aborted |
+| `core_version` | **Major** version must match StarForge's own `CARGO_PKG_VERSION` | Hard error — load aborted |
+
+The compatibility rule for `core_version` follows semantic versioning:
+
+- `0.x.y` plugins are **only** compatible with a `0.x.y` StarForge core (major `0`).
+- `1.x.y` plugins are **only** compatible with a `1.x.y` StarForge core (major `1`).
+- Minor and patch bumps within the same major are considered backwards-compatible.
+
+### Error messages
+
+When a plugin fails the version check you will see a clear message, for example:
+
+```
+Error: Plugin version incompatibility in 'libmy_plugin.so':
+  Plugin was built for StarForge 0.1.0
+  Running StarForge 1.0.0
+
+  The major version must match. Rebuild the plugin against
+  StarForge 1.0.0 or install a compatible StarForge version.
+  See DEVELOPER_GUIDE.md § "Plugin Version Compatibility" for details.
+```
+
+### Writing a compatible plugin
+
+1. **Pin the StarForge version** in your plugin's `Cargo.toml`:
+
+   ```toml
+   [dependencies]
+   # Use the same major version as the StarForge binary your users will run.
+   starforge = "0.1"
+   ```
+
+2. **Use the `export_plugin!` macro** — it embeds both `rustc_version` and
+   `core_version` automatically at compile time:
+
+   ```rust
+   use starforge::export_plugin;
+
+   export_plugin!(register);
+
+   fn register(registrar: &mut dyn starforge::plugins::PluginRegistrar) {
+       registrar.register_plugin(Box::new(MyPlugin));
+   }
+   ```
+
+3. **Rebuild when StarForge's major version changes.**  Check the running version
+   with `starforge --version` and compare it to the version your plugin was built
+   against (shown in `starforge plugin load` output under "Built for StarForge").
+
+4. **Use the same Rust toolchain** as the StarForge binary.  The easiest way is
+   to keep a `rust-toolchain.toml` in your plugin repo that mirrors the one in
+   the StarForge repo.
+
+### Checking compatibility without loading
+
+```bash
+# See which StarForge version is running
+starforge --version
+
+# See which version each installed plugin was built for
+starforge plugin load
+```
+
+The `load` command prints a "Built for StarForge" line for every successfully
+loaded plugin, and a descriptive error for any that fail the check.
 
 ---
 
@@ -116,11 +199,14 @@ cargo build
 # 7. Test manually
 cargo run -- <command>
 
-# 8. Commit
+# 8. Run smoke tests (optional but recommended)
+./scripts/e2e-smoke.sh
+
+# 9. Commit
 git add .
 git commit -m "feat: add my feature"
 
-# 9. Push and create PR
+# 10. Push and create PR
 git push origin feature/my-feature
 ```
 
@@ -569,6 +655,87 @@ cargo test --test integration_test
 
 # Run with coverage (requires tarpaulin)
 cargo tarpaulin --out Html
+```
+
+### End-to-End Smoke Tests
+
+StarForge includes an end-to-end smoke test script that verifies basic functionality across all major commands.
+
+**Location**: `scripts/e2e-smoke.sh`
+
+**Running Smoke Tests**:
+
+```bash
+# Build the project first
+cargo build --release
+
+# Run smoke tests (without network tests)
+./scripts/e2e-smoke.sh
+
+# Run smoke tests with network tests (requires internet)
+STARFORGE_E2E=1 ./scripts/e2e-smoke.sh
+```
+
+**What the smoke test covers**:
+
+1. **Basic Commands**
+   - `starforge info` - System information
+   - `starforge --version` - Version display
+   - `starforge --help` - Help text
+
+2. **Wallet Operations**
+   - `wallet create` - Create test wallet
+   - `wallet list` - List wallets
+   - `wallet show` - Display wallet details
+
+3. **Network Operations**
+   - `network show` - Display network configuration
+   - `network test` - Test network connectivity (requires `STARFORGE_E2E=1`)
+   - `wallet fund` - Fund testnet wallet (requires `STARFORGE_E2E=1`)
+
+4. **Template Operations**
+   - `template list` - List available templates
+   - `template search` - Search templates
+
+5. **Other Commands**
+   - `completions` - Generate shell completions
+
+**Network Test Gating**:
+
+Network tests are gated behind the `STARFORGE_E2E=1` environment variable because they:
+- Require internet connectivity
+- Depend on external services (Stellar testnet, Friendbot)
+- May be slow or flaky in CI environments
+- Can hit rate limits
+
+To skip network tests in CI:
+
+```yaml
+# .github/workflows/ci.yml
+- name: Run smoke tests
+  run: ./scripts/e2e-smoke.sh  # Skips network tests by default
+```
+
+To run full tests locally:
+
+```bash
+STARFORGE_E2E=1 ./scripts/e2e-smoke.sh
+```
+
+**Exit Codes**:
+- `0` - All tests passed
+- `1` - One or more tests failed
+
+**Cleanup**:
+
+The smoke test automatically cleans up test wallets on exit. If cleanup fails, you may need to manually remove test wallets:
+
+```bash
+# List wallets to find test wallets
+starforge wallet list
+
+# Remove test wallet (when delete command is implemented)
+# starforge wallet delete smoke-test-<timestamp>
 ```
 
 ### Test Organization

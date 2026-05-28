@@ -58,6 +58,10 @@ pub enum WalletCommands {
         /// Encrypt the secret key with a passphrase at rest
         #[arg(long, default_value = "false")]
         encrypt: bool,
+        /// Reject passphrases that score below "Strong" on the zxcvbn scale
+        /// (requires --encrypt)
+        #[arg(long, default_value = "false", requires = "encrypt")]
+        strict: bool,
     },
     /// List all saved wallets
     List,
@@ -210,7 +214,8 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             fund,
             network,
             encrypt,
-        } => create(name, fund, network, encrypt),
+            strict,
+        } => create(name, fund, network, encrypt, strict),
         WalletCommands::List => list(),
         WalletCommands::Show { name, reveal } => show(name, reveal),
         WalletCommands::Fund { name } => fund_wallet(name),
@@ -346,7 +351,13 @@ fn generate_keypair() -> (String, String) {
     (public_key, secret_key)
 }
 
-fn create(name: String, fund: bool, network_override: Option<String>, encrypt: bool) -> Result<()> {
+fn create(
+    name: String,
+    fund: bool,
+    network_override: Option<String>,
+    encrypt: bool,
+    strict: bool,
+) -> Result<()> {
     let mut cfg = config::load()?;
 
     config::validate_wallet_name(&name)?;
@@ -367,7 +378,22 @@ fn create(name: String, fund: bool, network_override: Option<String>, encrypt: b
 
     println!();
     let secret_to_store = if encrypt {
-        let pwd = crypto::prompt_password("Set a secure passphrase to encrypt this wallet", true)?;
+        if strict {
+            p::info(&format!(
+                "--strict mode active: passphrase must be {} characters or longer \
+                 and score \"{}\" or better.",
+                crypto::MIN_PASSPHRASE_LEN,
+                "Strong"
+            ));
+        } else {
+            p::info(&format!(
+                "Passphrase must be at least {} characters. \
+                 Add --strict to enforce a stronger passphrase.",
+                crypto::MIN_PASSPHRASE_LEN
+            ));
+        }
+        println!();
+        let pwd = crypto::prompt_passphrase("Set a passphrase to encrypt this wallet", strict)?;
         crypto::encrypt_secret(&pwd, &secret_key)?
     } else {
         secret_key.clone()

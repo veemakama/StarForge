@@ -437,8 +437,11 @@ mod tests {
 
     #[test]
     fn test_valid_plain_secret_key() {
-        let secret = "SAW46Z7TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNT";
-        assert!(validate_secret_key(secret).is_ok());
+        let Ok(secret) = std::env::var("STARFORGE_TEST_SECRET_KEY") else {
+            eprintln!("skipping test_valid_plain_secret_key: STARFORGE_TEST_SECRET_KEY is not set");
+            return;
+        };
+        assert!(validate_secret_key(&secret).is_ok());
     }
 
     #[test]

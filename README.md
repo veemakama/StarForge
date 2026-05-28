@@ -40,8 +40,10 @@ starforge new contract my-dex --template uniswap-v2 --from marketplace
 starforge template publish ./my-template
 ```
 
-### ?? Contract Deployment
-Validate, size-check, and deploy compiled Soroban `.wasm` files to Testnet or Mainnet. Verifies account balance on-chain, calculates WASM hash, and generates the exact `stellar contract deploy` command to complete the deployment.
+### 🚀 Contract Deployment
+Validate, size-check, and deploy compiled Soroban `.wasm` files to Testnet or Mainnet. Verifies account balance on-chain, calculates the Soroban WASM hash as a SHA-256 digest of the raw file bytes, and generates the exact `stellar contract deploy` command to complete the deployment.
+
+The local hash shown by `starforge deploy` is intended to match the value reported by `stellar contract inspect --wasm <file>` for the same bytecode.
 
 ---
 
@@ -299,6 +301,17 @@ starforge wallet show mykey --reveal
 ```
 
 Unencrypted keys (without `--encrypt`) are stored in plaintext and are suitable only for testnet or throwaway accounts. **Do not use plaintext keys on mainnet with real funds.**
+
+### Test Environment Secret
+
+Some tests validate secret-key parsing without embedding a secret in the repository. Set the value at runtime before running the test suite:
+
+```powershell
+$env:STARFORGE_TEST_SECRET_KEY = "S..."  # 56-character Stellar secret key
+cargo test
+```
+
+Generate this value outside the codebase using your preferred secure workflow, such as a local Stellar key generation command or an existing throwaway test wallet. The key should live only in your shell environment or secret manager, not in source control.
 
 ---
 
