@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateRegistry {
-    pub version: String,
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TemplateRegistry {
     #[serde(default)]
