@@ -14,4 +14,3 @@ fn bench_basic(c: &mut Criterion) {
 
 criterion_group!(benches, bench_basic);
 criterion_main!(benches);
-

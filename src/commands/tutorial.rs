@@ -9,9 +9,7 @@ pub enum TutorialCommands {
     /// List available tutorials
     List,
     /// Start a tutorial by slug (e.g. hello-world)
-    Start {
-        slug: String,
-    },
+    Start { slug: String },
     /// Show current tutorial status
     Status,
 }
@@ -107,4 +105,3 @@ fn status() -> Result<()> {
     }
     Ok(())
 }
-

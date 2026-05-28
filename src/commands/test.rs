@@ -28,10 +28,13 @@ pub fn handle(args: TestArgs) -> Result<()> {
         p::kv("Report", r);
     }
 
-    let result = test_runner::run_contract_tests(&args.wasm, test_runner::TestOptions {
-        coverage: args.coverage,
-        report_format: args.report.clone(),
-    })?;
+    let result = test_runner::run_contract_tests(
+        &args.wasm,
+        test_runner::TestOptions {
+            coverage: args.coverage,
+            report_format: args.report.clone(),
+        },
+    )?;
 
     println!();
     p::separator();
@@ -51,4 +54,3 @@ pub fn handle(args: TestArgs) -> Result<()> {
     p::success("All contract tests passed");
     Ok(())
 }
-

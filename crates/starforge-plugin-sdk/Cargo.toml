@@ -1,0 +1,9 @@
+[package]
+name = "starforge-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "SDK for building StarForge CLI plugins"
+license = "MIT"
+
+[lib]
+name = "starforge_plugin_sdk"

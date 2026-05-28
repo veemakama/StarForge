@@ -30,7 +30,8 @@ pub fn load_registry() -> Result<PluginRegistry> {
     if !path.exists() {
         return Ok(PluginRegistry::default());
     }
-    let s = fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let s =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
     let reg: PluginRegistry =
         serde_json::from_str(&s).with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(reg)
@@ -98,4 +99,3 @@ fn candidate_library_names(name: &str) -> Vec<String> {
         vec![format!("{base}.so")]
     }
 }
-

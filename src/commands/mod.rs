@@ -6,6 +6,7 @@ pub mod gas;
 pub mod info;
 pub mod inspect;
 pub mod invoke;
+pub mod lint;
 pub mod monitor;
 pub mod network;
 pub mod new;

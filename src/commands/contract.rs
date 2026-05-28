@@ -9,6 +9,10 @@ pub enum ContractCommands {
     Invoke(InvokeArgs),
     /// Inspect a deployed Soroban contract instance
     Inspect(InspectArgs),
+    /// Upload a WASM binary to the Stellar network (upload-only step)
+    ///
+    /// See: https://developers.stellar.org/docs/build/smart-contracts/getting-started/deploy-increment-contract
+    Upload(UploadArgs),
 }
 
 #[derive(Args)]
@@ -41,12 +45,29 @@ pub struct InspectArgs {
     /// Network to use; defaults to the global config network
     #[arg(long, value_parser = ["testnet", "mainnet"])]
     pub network: Option<String>,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct UploadArgs {
+    /// Path to the compiled WASM file
+    #[arg(long)]
+    pub wasm: String,
+    /// Network to use
+    #[arg(long, default_value = "testnet", value_parser = ["testnet", "mainnet"])]
+    pub network: String,
+    /// Wallet name to use for signing
+    #[arg(long)]
+    pub wallet: Option<String>,
 }
 
 pub fn handle(cmd: ContractCommands) -> Result<()> {
     match cmd {
         ContractCommands::Invoke(args) => handle_invoke(args),
         ContractCommands::Inspect(args) => handle_inspect(args),
+        ContractCommands::Upload(args) => handle_upload(args),
     }
 }
 
@@ -66,6 +87,11 @@ fn handle_inspect(args: InspectArgs) -> Result<()> {
     println!();
     p::step(1, 1, "Querying contract instance from Soroban RPC…");
     let inspect = soroban::inspect_contract(&args.contract_id, &network)?;
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&inspect)?);
+        return Ok(());
+    }
 
     println!();
     p::kv_accent("Contract ID", &inspect.contract_id);
@@ -229,10 +255,13 @@ fn handle_invoke(args: InvokeArgs) -> Result<()> {
     if args.submit {
         if let Some(mut wallet) = wallet {
             println!();
-            
+
             if let Some(sk) = &wallet.secret_key {
                 if sk.contains(':') {
-                    let pwd = crypto::prompt_password(&format!("Enter password to decrypt wallet '{}'", wallet.name), false)?;
+                    let pwd = crypto::prompt_password(
+                        &format!("Enter password to decrypt wallet '{}'", wallet.name),
+                        false,
+                    )?;
                     let plain_sk = crypto::decrypt_secret(&pwd, sk)?;
                     wallet.secret_key = Some(plain_sk);
                 }
@@ -259,6 +288,60 @@ fn handle_invoke(args: InvokeArgs) -> Result<()> {
     }
 
     p::separator();
+    Ok(())
+}
+
+fn handle_upload(args: UploadArgs) -> Result<()> {
+    config::validate_network(&args.network)?;
+
+    p::header("Upload WASM to Stellar Network");
+    p::separator();
+    p::kv("WASM", &args.wasm);
+    p::kv("Network", &args.network);
+
+    if args.network == "mainnet" {
+        p::warn("You are uploading on MAINNET. This will cost real XLM.");
+    }
+
+    let cfg = config::load()?;
+    let wallet = if let Some(ref name) = args.wallet {
+        cfg.wallets
+            .iter()
+            .find(|w| &w.name == name)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Wallet '{}' not found. Run `starforge wallet list`", name)
+            })?
+            .clone()
+    } else if !cfg.wallets.is_empty() {
+        p::info(&format!(
+            "No --wallet specified. Using: {}",
+            cfg.wallets[0].name.cyan()
+        ));
+        cfg.wallets[0].clone()
+    } else {
+        anyhow::bail!(
+            "No wallets found. Create one first:\n  starforge wallet create deployer --fund"
+        );
+    };
+
+    p::kv("Wallet", &wallet.name);
+    p::separator();
+
+    println!();
+    p::step(1, 1, "Uploading WASM binary…");
+
+    let wasm_hash = soroban::upload_wasm(&args.wasm, &args.network, &wallet)?;
+
+    println!();
+    p::kv_accent("WASM Hash", &wasm_hash);
+    p::success("WASM uploaded successfully.");
+    println!();
+    p::info("Next step — create the contract instance:");
+    p::info(&format!(
+        "  stellar contract deploy --wasm-hash {} --network {} --source {}",
+        wasm_hash, args.network, wallet.name
+    ));
+    println!();
     Ok(())
 }
 

@@ -80,13 +80,16 @@ enum Commands {
     /// Manage third-party plugins
     #[command(subcommand)]
     Plugin(commands::plugin::PluginCommands),
-    /// Manage community contract templates
+    /// Manage community contract templates from the marketplace
     #[command(subcommand)]
     Template(commands::template::TemplateCommands),
 
     /// Contract upgrade management (propose, approve, execute, rollback)
     #[command(subcommand)]
     Upgrade(commands::upgrade::UpgradeCommands),
+
+    /// Static analysis and linting for Soroban contracts
+    Lint(commands::lint::LintArgs),
 
     /// Execute an installed plugin command (e.g. `starforge defi ...`)
     #[command(external_subcommand)]
@@ -125,6 +128,8 @@ fn main() {
         Commands::Gas(_) => "gas",
         Commands::Plugin(_) => "plugin",
         Commands::Template(_) => "template",
+        Commands::Upgrade(_) => "upgrade",
+        Commands::Lint(_) => "lint",
         Commands::External(_) => "external",
     }
     .to_string();
@@ -148,6 +153,8 @@ fn main() {
         Commands::Gas(args) => commands::gas::handle(args),
         Commands::Plugin(args) => commands::plugin::handle(args),
         Commands::Template(args) => commands::template::handle(args),
+        Commands::Upgrade(args) => commands::upgrade::handle(args),
+        Commands::Lint(args) => commands::lint::handle(args),
         Commands::External(args) => handle_external_plugin(args),
     };
     let duration = start.elapsed();

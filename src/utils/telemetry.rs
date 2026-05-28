@@ -1,8 +1,8 @@
 use crate::utils::config;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -15,14 +15,14 @@ pub struct TelemetryData {
 
 pub fn track_event(event: &str, properties: serde_json::Value) -> Result<()> {
     let cfg = config::load()?;
-    
+
     // Check if telemetry is enabled (default to true, but respect opt-out)
     if !cfg.telemetry_enabled.unwrap_or(true) {
         return Ok(());
     }
 
     let anonymous_id = get_or_create_anonymous_id()?;
-    
+
     let data = TelemetryData {
         timestamp: Utc::now(),
         event: event.to_string(),
@@ -40,7 +40,7 @@ pub fn track_event(event: &str, properties: serde_json::Value) -> Result<()> {
 fn get_or_create_anonymous_id() -> Result<String> {
     let data_dir = config::get_data_dir()?;
     let id_file = data_dir.join("anonymous_id");
-    
+
     if id_file.exists() {
         Ok(fs::read_to_string(id_file)?.trim().to_string())
     } else {
@@ -53,17 +53,17 @@ fn get_or_create_anonymous_id() -> Result<String> {
 fn save_telemetry_locally(data: &TelemetryData) -> Result<()> {
     let data_dir = config::get_data_dir()?;
     let telemetry_log = data_dir.join("telemetry.log");
-    
+
     let json = serde_json::to_string(data)?;
-    
+
     use std::io::Write;
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(telemetry_log)?;
-    
+
     writeln!(file, "{}", json)?;
-    
+
     Ok(())
 }
 

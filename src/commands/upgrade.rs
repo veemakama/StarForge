@@ -18,6 +18,8 @@ pub enum UpgradeCommands {
     Propose(ProposeArgs),
     /// List pending upgrade proposals
     List(ListArgs),
+    /// Show status of upgrade proposals (alias for list)
+    Status(ListArgs),
     /// Approve a pending upgrade proposal
     Approve(ApproveArgs),
     /// Execute an approved upgrade proposal
@@ -237,16 +239,25 @@ pub fn wasm_hash(bytes: &[u8]) -> String {
 
 fn validate_wasm(path: &PathBuf) -> Result<(Vec<u8>, String)> {
     if !path.exists() {
-        anyhow::bail!("WASM file not found: {}\nRun `stellar contract build` first.", path.display());
+        anyhow::bail!(
+            "WASM file not found: {}\nRun `stellar contract build` first.",
+            path.display()
+        );
     }
     let bytes = fs::read(path)?;
     // Basic WASM magic number check: \0asm
     if bytes.len() < 4 || &bytes[..4] != b"\0asm" {
-        anyhow::bail!("File does not appear to be a valid WASM binary: {}", path.display());
+        anyhow::bail!(
+            "File does not appear to be a valid WASM binary: {}",
+            path.display()
+        );
     }
     let size_kb = bytes.len() as f64 / 1024.0;
     if size_kb > 128.0 {
-        p::warn(&format!("WASM is {:.1} KB — Soroban limit is 128 KB.", size_kb));
+        p::warn(&format!(
+            "WASM is {:.1} KB — Soroban limit is 128 KB.",
+            size_kb
+        ));
     }
     let hash = wasm_hash(&bytes);
     Ok((bytes, hash))
@@ -262,7 +273,8 @@ pub fn handle(cmd: UpgradeCommands) -> Result<()> {
     match cmd {
         UpgradeCommands::Prepare(args) => handle_prepare(args),
         UpgradeCommands::Propose(args) => handle_propose(args),
-        UpgradeCommands::List(args)    => handle_list(args),
+        UpgradeCommands::List(args) => handle_list(args),
+        UpgradeCommands::Status(args) => handle_list(args), // Alias for list
         UpgradeCommands::Approve(args) => handle_approve(args),
         UpgradeCommands::Execute(args) => handle_execute(args),
         UpgradeCommands::Rollback(args) => handle_rollback(args),
@@ -283,8 +295,9 @@ fn handle_prepare(args: PrepareArgs) -> Result<()> {
     p::step(2, 3, "Verifying contract exists on-chain…");
     // Verify the deployer account is reachable
     let cfg = config::load()?;
-    let wallet = cfg.wallets.first()
-        .ok_or_else(|| anyhow::anyhow!("No wallets found. Create one with `starforge wallet create`"))?;
+    let wallet = cfg.wallets.first().ok_or_else(|| {
+        anyhow::anyhow!("No wallets found. Create one with `starforge wallet create`")
+    })?;
     horizon::fetch_account(&wallet.public_key, &args.network)
         .map_err(|e| anyhow::anyhow!("Account not active on {}: {}", args.network, e))?;
 
@@ -292,18 +305,23 @@ fn handle_prepare(args: PrepareArgs) -> Result<()> {
     println!();
     p::separator();
     p::kv("Contract ID", &args.contract_id);
-    p::kv("Network",     &args.network);
-    p::kv("WASM file",   &args.wasm.display().to_string());
+    p::kv("Network", &args.network);
+    p::kv("WASM file", &args.wasm.display().to_string());
     p::kv_accent("New hash", &new_hash);
     println!();
-    println!("  {} {}", "Next step:".bright_white(), "create a proposal with:".dimmed());
+    println!(
+        "  {} {}",
+        "Next step:".bright_white(),
+        "create a proposal with:".dimmed()
+    );
     println!(
         "  {}",
         format!(
             "starforge upgrade propose --contract-id {} --wasm {} --description \"<reason>\"",
             args.contract_id,
             args.wasm.display()
-        ).cyan()
+        )
+        .cyan()
     );
     p::separator();
     Ok(())
@@ -328,7 +346,10 @@ fn handle_propose(args: ProposeArgs) -> Result<()> {
     // Check for duplicate
     let mut proposals = load_proposals()?;
     if proposals.iter().any(|p| p.id == proposal_id) {
-        anyhow::bail!("A proposal for this WASM hash already exists: {}", proposal_id);
+        anyhow::bail!(
+            "A proposal for this WASM hash already exists: {}",
+            proposal_id
+        );
     }
 
     let proposal = UpgradeProposal {
@@ -354,18 +375,32 @@ fn handle_propose(args: ProposeArgs) -> Result<()> {
 
     println!();
     p::separator();
-    p::kv_accent("Proposal ID",  &proposal_id);
-    p::kv("Contract ID",  &args.contract_id);
-    p::kv("New hash",     &new_hash);
-    p::kv("Description",  &args.description);
-    p::kv("Proposer",     &wallet.public_key);
-    p::kv("Threshold",    &args.threshold.to_string());
-    p::kv("Status",       if args.threshold <= 1 { "approved (auto)" } else { "pending" });
+    p::kv_accent("Proposal ID", &proposal_id);
+    p::kv("Contract ID", &args.contract_id);
+    p::kv("New hash", &new_hash);
+    p::kv("Description", &args.description);
+    p::kv("Proposer", &wallet.public_key);
+    p::kv("Threshold", &args.threshold.to_string());
+    p::kv(
+        "Status",
+        if args.threshold <= 1 {
+            "approved (auto)"
+        } else {
+            "pending"
+        },
+    );
     println!();
     if args.threshold <= 1 {
-        p::info(&format!("Ready to execute: starforge upgrade execute --proposal-id {}", proposal_id));
+        p::info(&format!(
+            "Ready to execute: starforge upgrade execute --proposal-id {}",
+            proposal_id
+        ));
     } else {
-        p::info(&format!("Needs {} more approval(s): starforge upgrade approve --proposal-id {}", args.threshold - 1, proposal_id));
+        p::info(&format!(
+            "Needs {} more approval(s): starforge upgrade approve --proposal-id {}",
+            args.threshold - 1,
+            proposal_id
+        ));
     }
     p::separator();
     Ok(())
@@ -376,9 +411,14 @@ fn handle_list(args: ListArgs) -> Result<()> {
     config::validate_network(&args.network)?;
 
     let proposals = load_proposals()?;
-    let filtered: Vec<_> = proposals.iter()
+    let filtered: Vec<_> = proposals
+        .iter()
         .filter(|p| p.network == args.network)
-        .filter(|p| args.contract_id.as_deref().is_none_or(|id| p.contract_id == id))
+        .filter(|p| {
+            args.contract_id
+                .as_deref()
+                .is_none_or(|id| p.contract_id == id)
+        })
         .collect();
 
     if filtered.is_empty() {
@@ -399,10 +439,12 @@ fn handle_list(args: ListArgs) -> Result<()> {
 
     for prop in &filtered {
         let status_colored = match prop.status {
-            ProposalStatus::Pending  => prop.status.to_string().yellow().to_string(),
+            ProposalStatus::Pending => prop.status.to_string().yellow().to_string(),
             ProposalStatus::Approved => prop.status.to_string().cyan().to_string(),
             ProposalStatus::Executed => prop.status.to_string().green().to_string(),
-            ProposalStatus::Rejected | ProposalStatus::Expired => prop.status.to_string().red().to_string(),
+            ProposalStatus::Rejected | ProposalStatus::Expired => {
+                prop.status.to_string().red().to_string()
+            }
         };
         let approvals = format!("{}/{}", prop.approvals.len(), prop.threshold);
         let created = prop.created_at.get(..10).unwrap_or(&prop.created_at);
@@ -427,15 +469,29 @@ fn handle_approve(args: ApproveArgs) -> Result<()> {
     let wallet = resolve_wallet(&cfg, args.wallet.as_deref())?;
 
     let mut proposals = load_proposals()?;
-    let proposal = proposals.iter_mut()
+    let proposal = proposals
+        .iter_mut()
         .find(|p| p.id == args.proposal_id && p.network == args.network)
-        .ok_or_else(|| anyhow::anyhow!("Proposal '{}' not found on {}", args.proposal_id, args.network))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Proposal '{}' not found on {}",
+                args.proposal_id,
+                args.network
+            )
+        })?;
 
     if proposal.status != ProposalStatus::Pending {
-        anyhow::bail!("Proposal '{}' is not pending (status: {})", args.proposal_id, proposal.status);
+        anyhow::bail!(
+            "Proposal '{}' is not pending (status: {})",
+            args.proposal_id,
+            proposal.status
+        );
     }
     if proposal.approvals.contains(&wallet.public_key) {
-        anyhow::bail!("Wallet '{}' has already approved this proposal", wallet.name);
+        anyhow::bail!(
+            "Wallet '{}' has already approved this proposal",
+            wallet.name
+        );
     }
 
     proposal.approvals.push(wallet.public_key.clone());
@@ -450,12 +506,15 @@ fn handle_approve(args: ApproveArgs) -> Result<()> {
     println!();
     p::kv_accent("Proposal", &args.proposal_id);
     p::kv("Approved by", &wallet.public_key);
-    p::kv("Approvals",   &approvals);
-    p::kv("Status",      &new_status);
+    p::kv("Approvals", &approvals);
+    p::kv("Status", &new_status);
     println!();
     if new_status == "approved" {
         p::success("Threshold reached — ready to execute.");
-        p::info(&format!("starforge upgrade execute --proposal-id {}", args.proposal_id));
+        p::info(&format!(
+            "starforge upgrade execute --proposal-id {}",
+            args.proposal_id
+        ));
     }
     Ok(())
 }
@@ -468,9 +527,16 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
     let wallet = resolve_wallet(&cfg, args.wallet.as_deref())?;
 
     let mut proposals = load_proposals()?;
-    let proposal = proposals.iter_mut()
+    let proposal = proposals
+        .iter_mut()
         .find(|p| p.id == args.proposal_id && p.network == args.network)
-        .ok_or_else(|| anyhow::anyhow!("Proposal '{}' not found on {}", args.proposal_id, args.network))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Proposal '{}' not found on {}",
+                args.proposal_id,
+                args.network
+            )
+        })?;
 
     if proposal.status != ProposalStatus::Approved {
         anyhow::bail!(
@@ -482,11 +548,11 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
     }
 
     p::separator();
-    p::kv("Proposal ID",  &proposal.id);
-    p::kv("Contract ID",  &proposal.contract_id);
+    p::kv("Proposal ID", &proposal.id);
+    p::kv("Contract ID", &proposal.contract_id);
     p::kv_accent("New WASM hash", &proposal.new_wasm_hash);
-    p::kv("Network",      &proposal.network);
-    p::kv("Executor",     &wallet.public_key);
+    p::kv("Network", &proposal.network);
+    p::kv("Executor", &wallet.public_key);
 
     if args.network == "mainnet" {
         p::warn("You are upgrading on MAINNET. This is irreversible without a rollback proposal.");
@@ -496,7 +562,10 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
         println!();
         print!("  Execute upgrade? [y/N] ");
         use std::io::BufRead;
-        let line = std::io::stdin().lock().lines().next()
+        let line = std::io::stdin()
+            .lock()
+            .lines()
+            .next()
             .unwrap_or(Ok(String::new()))?;
         if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
             p::info("Upgrade cancelled.");
@@ -534,14 +603,19 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
 
     println!();
     p::separator();
-    println!("  {} {}", "✓".green().bold(), "Upgrade ready! Run this to apply on-chain:".bright_white());
+    println!(
+        "  {} {}",
+        "✓".green().bold(),
+        "Upgrade ready! Run this to apply on-chain:".bright_white()
+    );
     println!();
     println!(
         "  {}",
         format!(
             "stellar contract upload --wasm <path-to-new.wasm> --source {} --network {}",
             wallet.public_key, args.network
-        ).cyan()
+        )
+        .cyan()
     );
     println!(
         "  {}",
@@ -572,10 +646,10 @@ fn handle_rollback(args: RollbackArgs) -> Result<()> {
         ))?;
 
     p::separator();
-    p::kv("Contract ID",    &args.contract_id);
+    p::kv("Contract ID", &args.contract_id);
     p::kv_accent("Rollback to", &args.to_hash);
     p::kv("Originally from", &target.proposal_id);
-    p::kv("Network",         &args.network);
+    p::kv("Network", &args.network);
 
     if args.network == "mainnet" {
         p::warn("Rolling back on MAINNET. Ensure backward compatibility before proceeding.");
@@ -585,7 +659,10 @@ fn handle_rollback(args: RollbackArgs) -> Result<()> {
         println!();
         print!("  Proceed with rollback? [y/N] ");
         use std::io::BufRead;
-        let line = std::io::stdin().lock().lines().next()
+        let line = std::io::stdin()
+            .lock()
+            .lines()
+            .next()
             .unwrap_or(Ok(String::new()))?;
         if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
             p::info("Rollback cancelled.");
@@ -595,7 +672,11 @@ fn handle_rollback(args: RollbackArgs) -> Result<()> {
 
     println!();
     p::separator();
-    println!("  {} {}", "✓".green().bold(), "Rollback command:".bright_white());
+    println!(
+        "  {} {}",
+        "✓".green().bold(),
+        "Rollback command:".bright_white()
+    );
     println!();
     println!(
         "  {}",
@@ -614,7 +695,8 @@ fn handle_history(args: HistoryArgs) -> Result<()> {
     config::validate_network(&args.network)?;
 
     let history = load_history()?;
-    let records: Vec<_> = history.iter()
+    let records: Vec<_> = history
+        .iter()
         .filter(|r| r.contract_id == args.contract_id && r.network == args.network)
         .collect();
 
@@ -625,7 +707,7 @@ fn handle_history(args: HistoryArgs) -> Result<()> {
 
     p::separator();
     p::kv("Contract ID", &args.contract_id);
-    p::kv("Network",     &args.network);
+    p::kv("Network", &args.network);
     println!();
     println!(
         "  {:<14}  {:<14}  {:<16}  {}",
@@ -642,7 +724,11 @@ fn handle_history(args: HistoryArgs) -> Result<()> {
             short_id(&record.from_hash).dimmed(),
             short_id(&record.to_hash).cyan(),
             record.proposal_id.white(),
-            record.timestamp.get(..16).unwrap_or(&record.timestamp).dimmed(),
+            record
+                .timestamp
+                .get(..16)
+                .unwrap_or(&record.timestamp)
+                .dimmed(),
         );
     }
     p::separator();
@@ -659,9 +745,17 @@ fn resolve_wallet<'a>(
         cfg.wallets
             .iter()
             .find(|w| w.name == wallet_name)
-            .ok_or_else(|| anyhow::anyhow!("Wallet '{}' not found. Run `starforge wallet list`", wallet_name))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Wallet '{}' not found. Run `starforge wallet list`",
+                    wallet_name
+                )
+            })
     } else if !cfg.wallets.is_empty() {
-        p::info(&format!("No --wallet specified. Using: {}", cfg.wallets[0].name.cyan()));
+        p::info(&format!(
+            "No --wallet specified. Using: {}",
+            cfg.wallets[0].name.cyan()
+        ));
         Ok(&cfg.wallets[0])
     } else {
         anyhow::bail!("No wallets found. Create one with `starforge wallet create <name> --fund`")

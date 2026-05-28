@@ -79,7 +79,8 @@ fn format_report(sha256: &str, format: &str, coverage: bool) -> Result<PathBuf> 
                 sha256,
                 coverage
             );
-            fs::write(&path, html).with_context(|| format!("Failed to write {}", path.display()))?;
+            fs::write(&path, html)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
         }
         other => {
             anyhow::bail!(
@@ -91,4 +92,3 @@ fn format_report(sha256: &str, format: &str, coverage: bool) -> Result<PathBuf> 
 
     Ok(path)
 }
-

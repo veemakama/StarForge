@@ -27,10 +27,15 @@ pub fn analyze_wasm(path: &Path) -> Result<GasReport> {
     // Heuristics only: keep this lightweight and deterministic.
     let mut suggestions = Vec::new();
     if size > 500_000 {
-        suggestions.push("Wasm is large; consider stripping symbols and removing unused features.".to_string());
+        suggestions.push(
+            "Wasm is large; consider stripping symbols and removing unused features.".to_string(),
+        );
     }
     if bytes.windows(4).any(|w| w == b"panic") {
-        suggestions.push("Panic strings detected; consider `panic = \"abort\"` and removing verbose messages.".to_string());
+        suggestions.push(
+            "Panic strings detected; consider `panic = \"abort\"` and removing verbose messages."
+                .to_string(),
+        );
     }
     if bytes.windows(7).any(|w| w == b"println") {
         suggestions.push("Debug printing detected; remove logs for production builds.".to_string());
@@ -67,4 +72,3 @@ pub fn optimize_wasm(input: &Path, output: &Path) -> Result<OptimizeResult> {
         output_path: output.to_path_buf(),
     })
 }
-

@@ -589,6 +589,7 @@ starforge new contract <NAME> [OPTIONS]
 - `--from <SOURCE>` - Use template from source (`marketplace`)
 - `--search <QUERY>` - Search for templates
 - `--tags <TAGS>` - Filter templates by tags
+- `--ci` - Generate `.github/workflows/stellar-ci.yml` (cargo test + WASM size checks)
 
 **Examples:**
 ```bash
@@ -606,6 +607,9 @@ starforge new contract my-dex --template uniswap-v2 --from marketplace
 
 # Search templates
 starforge new contract --search defi --tags dex
+
+# Include GitHub Actions CI
+starforge new contract my-contract --ci
 ```
 
 ---
@@ -624,11 +628,22 @@ starforge contract inspect <CONTRACT_ID> [OPTIONS]
 
 **Options:**
 - `--network <NETWORK>` - Network to use
+- `--json` - Print machine-readable JSON output
 
 **Example:**
 ```bash
 starforge contract inspect CCPYZFKEAXHHS5VVW5J45TOU7S2EODJ7TZNJIA5LKDVL3PESCES6FNCI
 ```
+
+**JSON schema (`--json`):**
+- `contract_id` (string)
+- `executable` (string)
+- `wasm_hash` (string|null)
+- `storage_durability` (string)
+- `latest_ledger` (number)
+- `last_modified_ledger_seq` (number|null)
+- `live_until_ledger_seq` (number|null)
+- `instance_storage` (array of objects): `{ "key": string, "value": string }`
 
 ---
 
@@ -646,6 +661,7 @@ starforge deploy --wasm <FILE> [OPTIONS]
 - `--network <NETWORK>` - Network to deploy to (`testnet`, `mainnet`)
 - `--wallet <NAME>` - Wallet name to use for deployment
 - `--yes` - Skip confirmation prompt
+- `--execute` - Execute `stellar contract deploy ...` when `stellar` CLI is on PATH (default is dry-run)
 
 **Examples:**
 ```bash
@@ -660,6 +676,9 @@ starforge deploy \
 
 # Skip confirmation (for CI)
 starforge deploy --wasm ./my_contract.wasm --yes
+
+# Execute immediately (requires stellar CLI on PATH)
+starforge deploy --wasm ./my_contract.wasm --execute
 ```
 
 ---
@@ -777,6 +796,45 @@ starforge tx send --from alice --to GDEF... --amount 10 --yes
 
 ---
 
+### `starforge tx batch`
+
+Submit multiple Stellar operations in a single transaction from a JSON file.
+
+**Usage:**
+```bash
+starforge tx batch --file <FILE> --from <WALLET> [OPTIONS]
+```
+
+**Options:**
+- `--file <FILE>` - Path to operations JSON (required)
+- `--from <WALLET>` - Source wallet name (required)
+- `--network <NETWORK>` - Network to use (`testnet` or `mainnet`, default: `testnet`)
+- `--yes` - Skip confirmation prompt
+
+**Operations file schema:**
+```json
+{
+  "operations": [
+    {
+      "type": "payment",
+      "to": "GDEF...",
+      "amount": "100",
+      "asset": "XLM"
+    }
+  ]
+}
+```
+
+Supported operation types: `payment` (`to`, `amount`, optional `asset` as `XLM` or `CODE:ISSUER`).
+
+**Examples:**
+```bash
+starforge tx batch --file operations.json --from alice
+starforge tx batch --file ops.json --from alice --network testnet --yes
+```
+
+---
+
 ### `starforge tx history`
 
 Fetch and display recent transactions.
@@ -868,6 +926,8 @@ starforge shell --contract <WASM>
 
 **Options:**
 - `--contract <WASM>` - Path to compiled contract
+- `--no-history` - Disable persistent history for this session
+- `--history-max-lines <N>` - Max lines to keep in `~/.starforge/repl_history` (default: 1000)
 
 **Example:**
 ```bash
@@ -954,6 +1014,46 @@ starforge gas optimize --target <INPUT> --output <OUTPUT>
 **Options:**
 - `--target <INPUT>` - Input wasm file (required)
 - `--output <OUTPUT>` - Output wasm file (required)
+
+#### `starforge gas diff`
+
+Compare two wasm builds side-by-side and diff estimated simulation cost.
+
+**Usage:**
+```bash
+starforge gas diff <OLD_WASM> <NEW_WASM>
+```
+
+**Arguments:**
+- `<OLD_WASM>` - Baseline wasm file
+- `<NEW_WASM>` - Candidate wasm file
+
+**Output includes:**
+- Old/new wasm size
+- Old/new estimated simulation cost
+- Delta and percentage change
+- Profiling timings per analysis step
+
+---
+
+### `starforge inspect storage`
+
+List decoded storage entries for a contract scope.
+
+**Usage:**
+```bash
+starforge inspect storage <CONTRACT_ID> [OPTIONS]
+```
+
+**Options:**
+- `--scope <SCOPE>` - `instance`, `persistent`, or `temporary`
+- `--network <NETWORK>` - Network to use (`testnet`, `mainnet`)
+- `--json` - Print machine-readable JSON output
+
+**JSON schema (`--json`):**
+- `contract_id` (string)
+- `scope` (string)
+- `entries` (array of objects): `{ "key": string, "value": string }`
 
 ---
 

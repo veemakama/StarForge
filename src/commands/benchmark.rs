@@ -106,7 +106,10 @@ pub fn handle(args: BenchmarkArgs) -> Result<()> {
         p::separator();
         p::kv_accent("Elapsed", &format!("{} ms", elapsed_ms));
         for phase in &phase_ms {
-            p::kv(&format!("Phase {}", phase.name), &format!("{} ms", phase.ms));
+            p::kv(
+                &format!("Phase {}", phase.name),
+                &format!("{} ms", phase.ms),
+            );
         }
         p::info(&format!(
             "Run Criterion benchmarks with: {}",

@@ -1,5 +1,5 @@
 use colored::*;
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::time::Duration;
 
 pub fn success(msg: &str) {
@@ -58,11 +58,13 @@ pub fn spinner(msg: &str) -> ProgressBar {
 
 pub fn progress_bar(total: u64, msg: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    pb.set_style(ProgressStyle::with_template(
-        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}"
-    )
-    .unwrap()
-    .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+        )
+        .unwrap()
+        .progress_chars("#>-"),
+    );
     pb.set_message(msg.to_string());
     pb
 }
@@ -70,4 +72,12 @@ pub fn progress_bar(total: u64, msg: &str) -> ProgressBar {
 #[allow(dead_code)]
 pub fn multi_progress() -> MultiProgress {
     MultiProgress::new()
+}
+
+pub fn verified_badge(verified: bool) -> colored::ColoredString {
+    if verified {
+        " ✓ verified".green()
+    } else {
+        "".normal()
+    }
 }

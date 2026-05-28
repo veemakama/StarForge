@@ -54,14 +54,20 @@ pub struct StorageArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Maximum number of entries to show
+    #[arg(long, default_value = "20")]
+    pub limit: usize,
+    /// Pagination cursor (entry index to start from)
+    #[arg(long)]
+    pub cursor: Option<usize>,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn handle(cmd: InspectCommands) -> Result<()> {
     match cmd {
-        InspectCommands::State(args)   => handle_state(args),
-        InspectCommands::Key(args)     => handle_key(args),
+        InspectCommands::State(args) => handle_state(args),
+        InspectCommands::Key(args) => handle_key(args),
         InspectCommands::Storage(args) => handle_storage(args),
     }
 }
@@ -75,7 +81,7 @@ fn handle_state(args: StateArgs) -> Result<()> {
     p::header("Contract State");
     p::separator();
     p::kv("Contract ID", &args.contract_id);
-    p::kv("Network",     &args.network);
+    p::kv("Network", &args.network);
     p::separator();
 
     println!();
@@ -101,20 +107,23 @@ fn handle_state(args: StateArgs) -> Result<()> {
         return Ok(());
     }
 
-    p::kv_accent("Contract ID",       &result.contract_id);
-    p::kv("Executable",               &result.executable);
+    p::kv_accent("Contract ID", &result.contract_id);
+    p::kv("Executable", &result.executable);
     p::kv(
         "WASM Hash",
-        result.wasm_hash.as_deref().unwrap_or("n/a (stellar asset contract)"),
+        result
+            .wasm_hash
+            .as_deref()
+            .unwrap_or("n/a (stellar asset contract)"),
     );
-    p::kv("Storage Durability",       &result.storage_durability);
-    p::kv("Latest Ledger",            &result.latest_ledger.to_string());
+    p::kv("Storage Durability", &result.storage_durability);
+    p::kv("Latest Ledger", &result.latest_ledger.to_string());
 
     if let Some(v) = result.last_modified_ledger_seq {
         p::kv("Last Modified Ledger", &v.to_string());
     }
     if let Some(v) = result.live_until_ledger_seq {
-        p::kv("Live Until Ledger",    &v.to_string());
+        p::kv("Live Until Ledger", &v.to_string());
     }
 
     println!();
@@ -130,9 +139,9 @@ fn handle_key(args: KeyArgs) -> Result<()> {
     p::header("Contract Storage Key");
     p::separator();
     p::kv("Contract ID", &args.contract_id);
-    p::kv("Key",         &args.key);
-    p::kv("Scope",       &args.scope);
-    p::kv("Network",     &args.network);
+    p::kv("Key", &args.key);
+    p::kv("Scope", &args.scope);
+    p::kv("Network", &args.network);
     p::separator();
 
     println!();
@@ -142,7 +151,8 @@ fn handle_key(args: KeyArgs) -> Result<()> {
 
     // Search instance storage for the key (case-insensitive symbol match)
     let needle = args.key.to_lowercase();
-    let found: Vec<_> = result.instance_storage
+    let found: Vec<_> = result
+        .instance_storage
         .iter()
         .filter(|e| e.key.to_lowercase().contains(&needle))
         .collect();
@@ -174,8 +184,8 @@ fn handle_storage(args: StorageArgs) -> Result<()> {
     p::header("Contract Storage");
     p::separator();
     p::kv("Contract ID", &args.contract_id);
-    p::kv("Scope",       &args.scope);
-    p::kv("Network",     &args.network);
+    p::kv("Scope", &args.scope);
+    p::kv("Network", &args.network);
     p::separator();
 
     println!();
@@ -196,9 +206,26 @@ fn handle_storage(args: StorageArgs) -> Result<()> {
         return Ok(());
     }
 
-    print_storage_table(&result.instance_storage, &args.scope);
+    let entries = paginate(&result.instance_storage, args.cursor, args.limit);
+    let total = result.instance_storage.len();
+    print_storage_table(entries, &args.scope);
+
+    let start = args.cursor.unwrap_or(0);
+    let end = start + entries.len();
+    if end < total {
+        p::info(&format!(
+            "Showing {}-{} of {} entries. Use --cursor {} to see more.",
+            start + 1, end, total, end
+        ));
+    }
     p::separator();
     Ok(())
+}
+
+fn paginate(entries: &[soroban::ContractStorageEntry], cursor: Option<usize>, limit: usize) -> &[soroban::ContractStorageEntry] {
+    let start = cursor.unwrap_or(0).min(entries.len());
+    let end = (start + limit).min(entries.len());
+    &entries[start..end]
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────────
@@ -206,8 +233,8 @@ fn handle_storage(args: StorageArgs) -> Result<()> {
 fn print_storage_table(entries: &[soroban::ContractStorageEntry], scope: &str) {
     let scope_label = match scope {
         "persistent" => "Persistent Storage",
-        "temporary"  => "Temporary Storage",
-        _            => "Instance Storage",
+        "temporary" => "Temporary Storage",
+        _ => "Instance Storage",
     };
 
     println!(
@@ -224,11 +251,7 @@ fn print_storage_table(entries: &[soroban::ContractStorageEntry], scope: &str) {
         return;
     }
 
-    println!(
-        "  {:<32}  {}",
-        "Key".dimmed(),
-        "Value".dimmed()
-    );
+    println!("  {:<32}  {}", "Key".dimmed(), "Value".dimmed());
     println!("  {}", "─".repeat(72).dimmed());
 
     for entry in entries {
@@ -250,7 +273,9 @@ fn pretty_value(raw: &str) -> String {
     }
     // Addresses (G... or C...)
     if raw.len() == 56 && (raw.starts_with('G') || raw.starts_with('C')) {
-        return format!("{}…{}", &raw[..8], &raw[raw.len()-4..]).yellow().to_string();
+        return format!("{}…{}", &raw[..8], &raw[raw.len() - 4..])
+            .yellow()
+            .to_string();
     }
     // Hex bytes
     if raw.starts_with("0x") {

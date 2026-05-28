@@ -47,8 +47,8 @@ impl Default for LogConfig {
 /// ```
 pub fn init(config: LogConfig) -> Result<()> {
     // RUST_LOG takes precedence; fall back to the configured level.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(config.level.as_str()));
 
     match (config.format, config.log_dir) {
         // ── JSON + file rotation ──────────────────────────────────────────

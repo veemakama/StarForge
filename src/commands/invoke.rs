@@ -144,7 +144,10 @@ fn parse_arg_types(arg_types: &Option<String>) -> Result<Vec<String>> {
             let types: Vec<String> = s.split(',').map(|t| t.trim().to_string()).collect();
             for t in &types {
                 if !matches!(t.as_str(), "string" | "symbol" | "int" | "bool" | "address") {
-                    anyhow::bail!("Invalid argument type '{}'. Supported: string, symbol, int, bool, address", t);
+                    anyhow::bail!(
+                        "Invalid argument type '{}'. Supported: string, symbol, int, bool, address",
+                        t
+                    );
                 }
             }
             Ok(types)
@@ -160,7 +163,10 @@ mod tests {
     #[test]
     fn test_parse_args() {
         assert_eq!(parse_args(&None).unwrap(), Vec::<String>::new());
-        assert_eq!(parse_args(&Some("".to_string())).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            parse_args(&Some("".to_string())).unwrap(),
+            Vec::<String>::new()
+        );
         assert_eq!(
             parse_args(&Some("arg1,arg2,arg3".to_string())).unwrap(),
             vec!["arg1", "arg2", "arg3"]

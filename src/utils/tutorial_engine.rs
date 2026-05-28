@@ -10,7 +10,8 @@ pub struct TutorialStatus {
 }
 
 fn status_path() -> Result<PathBuf> {
-    let base = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Unable to resolve home directory"))?;
+    let base =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Unable to resolve home directory"))?;
     Ok(base.join(".starforge").join("tutorial_status.json"))
 }
 
@@ -36,4 +37,3 @@ pub fn save_status(status: &TutorialStatus) -> Result<()> {
 pub fn tutorials_dir(repo_root: &Path) -> PathBuf {
     repo_root.join("tutorials")
 }
-
