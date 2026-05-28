@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rand::Rng;
 use serde::Deserialize;
 use std::thread;
 use std::time::Duration;
@@ -9,6 +10,7 @@ pub struct SorobanEventStream {
     contract_id: String,
     cursor: Option<String>,
     poll_interval: Duration,
+    backoff: Backoff,
 }
 
 impl SorobanEventStream {
@@ -18,6 +20,7 @@ impl SorobanEventStream {
             contract_id,
             cursor: None,
             poll_interval: Duration::from_secs(2),
+            backoff: Backoff::default(),
         }
     }
 
@@ -65,11 +68,16 @@ impl SorobanEventStream {
             .ok_or_else(|| anyhow::anyhow!("Soroban RPC getEvents returned no result"))?;
 
         self.cursor = result.cursor;
+        self.backoff.reset();
         Ok(result.events)
     }
 
     pub fn sleep(&self) {
         thread::sleep(self.poll_interval);
+    }
+
+    pub fn sleep_backoff(&mut self) {
+        thread::sleep(self.backoff.next_delay());
     }
 }
 
@@ -96,5 +104,45 @@ pub struct SorobanEvent {
     #[allow(dead_code)]
     pub topic: Vec<String>,
     pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct Backoff {
+    attempt: u32,
+    base: Duration,
+    max: Duration,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self {
+            attempt: 0,
+            base: Duration::from_millis(250),
+            max: Duration::from_secs(15),
+        }
+    }
+}
+
+impl Backoff {
+    fn reset(&mut self) {
+        self.attempt = 0;
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        // Exponential backoff with jitter. Attempt is capped to keep duration bounded.
+        let capped = self.attempt.min(16);
+        self.attempt = self.attempt.saturating_add(1);
+
+        let pow2_ms = self
+            .base
+            .as_millis()
+            .saturating_mul(1u128.saturating_shl(capped));
+        let raw_ms = pow2_ms.min(self.max.as_millis());
+
+        let jitter = rand::thread_rng().gen_range(0..=250u128);
+        let ms = (raw_ms + jitter).min(self.max.as_millis());
+
+        Duration::from_millis(ms as u64)
+    }
 }
 

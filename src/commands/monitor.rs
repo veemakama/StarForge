@@ -1,6 +1,10 @@
-use crate::utils::{config, horizon, notifications, print as p, stream::SorobanEventStream};
+use crate::utils::{config, horizon, notifications, print as p, soroban, stream::SorobanEventStream};
 use anyhow::Result;
 use clap::Args;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Args)]
 pub struct MonitorArgs {
@@ -11,6 +15,10 @@ pub struct MonitorArgs {
     /// Comma-separated list of event names to filter (best-effort; matches topic strings)
     #[arg(long)]
     pub events: Option<String>,
+
+    /// Stream events continuously until Ctrl+C (contract mode)
+    #[arg(long)]
+    pub follow: bool,
 
     /// Wallet name from starforge config to monitor
     #[arg(long)]
@@ -41,7 +49,13 @@ pub fn handle(args: MonitorArgs) -> Result<()> {
     println!();
 
     match (&args.contract, &args.wallet) {
-        (Some(contract_id), None) => monitor_contract(contract_id, args.events.as_deref(), network, args.interval),
+        (Some(contract_id), None) => monitor_contract(
+            contract_id,
+            args.events.as_deref(),
+            network,
+            args.interval,
+            args.follow,
+        ),
         (None, Some(wallet_name)) => monitor_wallet(wallet_name, args.threshold, network, args.interval),
         _ => anyhow::bail!("Specify either --contract or --wallet (but not both)"),
     }
@@ -52,6 +66,7 @@ fn monitor_contract(
     events_filter: Option<&str>,
     network: &str,
     interval: u64,
+    follow: bool,
 ) -> Result<()> {
     config::validate_contract_id(contract_id)?;
 
@@ -62,42 +77,68 @@ fn monitor_contract(
             .collect()
     });
 
-    let rpc_url = match network {
-        "mainnet" => "https://mainnet.sorobanrpc.com",
-        "docker-testnet" => "http://localhost:8000/rpc",
-        _ => "https://soroban-testnet.stellar.org",
-    }
-    .to_string();
+    let rpc_url = soroban::rpc_url(network);
 
     notifications::info(&format!(
-        "Streaming contract events from {} (best-effort polling).",
+        "Streaming contract events from {}.",
         rpc_url
     ));
 
-    let mut stream = SorobanEventStream::new(rpc_url, contract_id.to_string()).with_poll_interval(interval);
-    loop {
-        let batch = stream.next_batch()?;
-        for event in batch {
-            let as_text = event.value.to_string();
-            if let Some(ref filters) = filter_set {
-                let mut matches = false;
-                for f in filters {
-                    if as_text.to_lowercase().contains(f) {
-                        matches = true;
-                        break;
-                    }
-                }
-                if !matches {
-                    continue;
-                }
-            }
-            notifications::success(&format!(
-                "Ledger {} event {}: {}",
-                event.ledger, event.id, as_text
-            ));
-        }
-        stream.sleep();
+    let should_run = Arc::new(AtomicBool::new(true));
+    {
+        let should_run = Arc::clone(&should_run);
+        let _ = ctrlc::set_handler(move || {
+            should_run.store(false, Ordering::SeqCst);
+        });
     }
+
+    let mut stream =
+        SorobanEventStream::new(rpc_url, contract_id.to_string()).with_poll_interval(interval);
+
+    let mut printed_any = false;
+    while should_run.load(Ordering::SeqCst) {
+        match stream.next_batch() {
+            Ok(batch) => {
+                for event in batch {
+                    let as_text = event.value.to_string();
+                    if let Some(ref filters) = filter_set {
+                        let mut matches = false;
+                        for f in filters {
+                            if as_text.to_lowercase().contains(f) {
+                                matches = true;
+                                break;
+                            }
+                        }
+                        if !matches {
+                            continue;
+                        }
+                    }
+                    printed_any = true;
+                    notifications::success(&format!(
+                        "Ledger {} event {}: {}",
+                        event.ledger, event.id, as_text
+                    ));
+                }
+
+                if !follow {
+                    break;
+                }
+                stream.sleep();
+            }
+            Err(err) => {
+                if !follow && !printed_any {
+                    return Err(err);
+                }
+                notifications::warn(&format!(
+                    "Event stream error: {}. Reconnecting with backoff…",
+                    err
+                ));
+                stream.sleep_backoff();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn monitor_wallet(
