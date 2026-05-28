@@ -208,6 +208,31 @@ struct HorizonError {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BatchPaymentOp {
+    pub destination: String,
+    pub amount: String,
+    pub asset_code: Option<String>,
+    pub asset_issuer: Option<String>,
+}
+
+pub fn build_and_simulate_batch(
+    source: &str,
+    operations: &[BatchPaymentOp],
+    sequence: &str,
+    network: &str,
+) -> Result<TransactionSimulationResult> {
+    let tx_xdr = build_batch_transaction_xdr(source, operations, sequence, network)?;
+
+    let base_fee_per_op = 100_000u64;
+    let estimated_fee = base_fee_per_op.saturating_mul(operations.len() as u64);
+
+    Ok(TransactionSimulationResult {
+        transaction_xdr: tx_xdr,
+        fee: estimated_fee,
+    })
+}
+
 pub fn build_and_simulate_payment(
     source: &str,
     destination: &str,
@@ -341,6 +366,49 @@ pub fn submit_multisig_transaction(
             anyhow::bail!("Transaction failed with status {}: {}", status, error_text);
         }
     }
+}
+
+fn build_batch_transaction_xdr(
+    source: &str,
+    operations: &[BatchPaymentOp],
+    sequence: &str,
+    network: &str,
+) -> Result<String> {
+    if operations.is_empty() {
+        anyhow::bail!("Batch transaction requires at least one operation");
+    }
+
+    let _network_passphrase = match network {
+        "mainnet" => "Public Global Stellar Network ; September 2015",
+        _ => "Test SDF Network ; September 2015",
+    };
+
+    let op_parts: Vec<String> = operations
+        .iter()
+        .enumerate()
+        .map(|(i, op)| {
+            let asset_info = match (&op.asset_code, &op.asset_issuer) {
+                (None, None) => "native".to_string(),
+                (Some(code), Some(issuer)) => format!("{}:{}", code, issuer),
+                _ => return Err(anyhow::anyhow!("Invalid asset in operation {}", i + 1)),
+            };
+            Ok(format!(
+                "pay:{}:{}:{}",
+                op.destination, op.amount, asset_info
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mock_xdr = format!(
+        "mock_batch_tx_{}_{}_{}_{}",
+        source,
+        op_parts.join("|"),
+        sequence,
+        network
+    );
+
+    use base64::{engine::general_purpose, Engine as _};
+    Ok(general_purpose::STANDARD.encode(mock_xdr))
 }
 
 fn build_payment_transaction_xdr(
