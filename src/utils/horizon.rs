@@ -33,11 +33,12 @@ pub struct Balance {
 }
 
 pub fn fund_account(public_key: &str, network: &str) -> Result<()> {
-    let friendbot = friendbot_url(network)?
-        .unwrap_or_else(|| "https://friendbot.stellar.org".to_string());
+    let friendbot =
+        friendbot_url(network)?.unwrap_or_else(|| "https://friendbot.stellar.org".to_string());
     let separator = if friendbot.contains('?') { '&' } else { '?' };
     let url = format!("{}{}addr={}", friendbot, separator, public_key);
-    let res = ureq::get(&url).call()
+    let res = ureq::get(&url)
+        .call()
         .with_context(|| format!("Friendbot request failed for {}", network))?;
     if res.status() == 200 {
         Ok(())
@@ -49,10 +50,12 @@ pub fn fund_account(public_key: &str, network: &str) -> Result<()> {
 pub fn fetch_account(public_key: &str, network: &str) -> Result<AccountResponse> {
     let horizon = horizon_url(network)?;
     let url = format!("{}/accounts/{}", horizon, public_key);
-    let res = ureq::get(&url).call()
+    let res = ureq::get(&url)
+        .call()
         .with_context(|| format!("Failed to reach Horizon on {}", network))?;
     if res.status() == 200 {
-        let account: AccountResponse = res.into_json()
+        let account: AccountResponse = res
+            .into_json()
             .with_context(|| "Failed to parse account response")?;
         Ok(account)
     } else {
@@ -63,13 +66,20 @@ pub fn fetch_account(public_key: &str, network: &str) -> Result<AccountResponse>
 pub fn check_network(network: &str) -> bool {
     if let Ok(horizon) = horizon_url(network) {
         let url = format!("{}/", horizon);
-        ureq::get(&url).call().map(|r| r.status() == 200).unwrap_or(false)
+        ureq::get(&url)
+            .call()
+            .map(|r| r.status() == 200)
+            .unwrap_or(false)
     } else {
         false
     }
 }
 
-pub fn build_transaction_query_url(public_key: &str, network: &str, filter: &TxFilter) -> Result<String> {
+pub fn build_transaction_query_url(
+    public_key: &str,
+    network: &str,
+    filter: &TxFilter,
+) -> Result<String> {
     let horizon = horizon_url(network)?;
     let mut url = format!(
         "{}/accounts/{}/transactions?order={}&limit={}",
@@ -103,16 +113,6 @@ pub struct TransactionRecord {
     pub transaction_type: Option<String>,
     pub paging_token: Option<String>,
 }
-    pub hash: String,
-    pub successful: bool,
-    pub operation_count: u32,
-    pub fee_charged: String,
-    pub created_at: String,
-    pub memo_type: Option<String>,
-    pub memo: Option<String>,
-    pub source_account: Option<String>,
-    pub paging_token: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct TransactionsResponse {
@@ -141,13 +141,17 @@ pub fn fetch_transactions(
     network: &str,
     limit: u8,
 ) -> Result<Vec<TransactionRecord>> {
-    fetch_transactions_filtered(public_key, network, TxFilter {
-        limit,
-        cursor: None,
-        after: None,
-        before: None,
-        successful_only: None,
-    })
+    fetch_transactions_filtered(
+        public_key,
+        network,
+        TxFilter {
+            limit,
+            cursor: None,
+            after: None,
+            before: None,
+            successful_only: None,
+        },
+    )
 }
 
 pub fn fetch_transactions_filtered(
@@ -215,20 +219,26 @@ pub fn build_and_simulate_payment(
 ) -> Result<TransactionSimulationResult> {
     // For now, we'll use a simplified approach by calling the stellar CLI
     // In a production implementation, you'd use stellar-xdr to build the transaction properly
-    
+
     // Build transaction XDR using stellar-sdk patterns
     let tx_xdr = build_payment_transaction_xdr(
-        source, destination, amount, asset_code, asset_issuer, sequence, network
+        source,
+        destination,
+        amount,
+        asset_code,
+        asset_issuer,
+        sequence,
+        network,
     )?;
-    
+
     // Simulate the transaction
     let horizon = horizon_url(network)?;
     let _url = format!("{}/transactions", horizon);
     let _form_data = format!("tx={}", urlencoding::encode(&tx_xdr));
-    
+
     // For simulation, we'll estimate the fee
     let estimated_fee = 100000u64; // 0.00001 XLM in stroops
-    
+
     Ok(TransactionSimulationResult {
         transaction_xdr: tx_xdr,
         fee: estimated_fee,
@@ -242,38 +252,44 @@ pub fn submit_payment_transaction(
 ) -> Result<TransactionSubmitResult> {
     // Sign the transaction
     let signed_xdr = sign_transaction_xdr(transaction_xdr, secret_key, network)?;
-    
+
     // Submit to Horizon
     let horizon = horizon_url(network)?;
     let url = format!("{}/transactions", horizon);
     let form_data = format!("tx={}", urlencoding::encode(&signed_xdr));
-    
+
     let res = ureq::post(&url)
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(&form_data)
         .with_context(|| "Failed to submit transaction to Horizon")?;
 
     let status = res.status();
-    
+
     if status == 200 {
-        let result: serde_json::Value = res.into_json()
+        let result: serde_json::Value = res
+            .into_json()
             .with_context(|| "Failed to parse transaction response")?;
-        
-        let hash = result.get("hash")
+
+        let hash = result
+            .get("hash")
             .and_then(|h| h.as_str())
             .unwrap_or("unknown")
             .to_string();
-            
+
         Ok(TransactionSubmitResult {
             hash,
             successful: true,
         })
     } else {
-        let error_text = res.into_string().unwrap_or_else(|_| "Unknown error".to_string());
-        
+        let error_text = res
+            .into_string()
+            .unwrap_or_else(|_| "Unknown error".to_string());
+
         // Try to parse Horizon error format
         if let Ok(horizon_error) = serde_json::from_str::<HorizonError>(&error_text) {
-            let detail = horizon_error.detail.unwrap_or_else(|| "No additional details".to_string());
+            let detail = horizon_error
+                .detail
+                .unwrap_or_else(|| "No additional details".to_string());
             anyhow::bail!("Transaction failed: {} - {}", horizon_error.title, detail);
         } else {
             anyhow::bail!("Transaction failed with status {}: {}", status, error_text);
@@ -297,8 +313,9 @@ pub fn submit_multisig_transaction(
 
     let status = res.status();
     if status == 200 {
-        let result: serde_json::Value =
-            res.into_json().with_context(|| "Failed to parse transaction response")?;
+        let result: serde_json::Value = res
+            .into_json()
+            .with_context(|| "Failed to parse transaction response")?;
 
         let hash = result
             .get("hash")
@@ -337,47 +354,47 @@ fn build_payment_transaction_xdr(
 ) -> Result<String> {
     // This is a simplified mock implementation
     // In production, you'd use stellar-xdr crate to build proper transaction XDR
-    
+
     let _network_passphrase = match network {
         "mainnet" => "Public Global Stellar Network ; September 2015",
         _ => "Test SDF Network ; September 2015",
     };
-    
+
     // Mock XDR generation - in reality this would be much more complex
     let asset_info = match (asset_code, asset_issuer) {
         (None, None) => "native".to_string(),
         (Some(code), Some(issuer)) => format!("{}:{}", code, issuer),
         _ => return Err(anyhow::anyhow!("Invalid asset specification")),
     };
-    
+
     // Generate a mock transaction XDR
     // In production, use stellar-xdr to build proper TransactionEnvelope
     let mock_xdr = format!(
         "mock_payment_tx_{}_{}_{}_{}_{}",
         source, destination, amount, asset_info, sequence
     );
-    
-    use base64::{Engine as _, engine::general_purpose};
+
+    use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(mock_xdr))
 }
 
 fn sign_transaction_xdr(transaction_xdr: &str, secret_key: &str, network: &str) -> Result<String> {
     // This is a simplified mock implementation
     // In production, you'd use stellar-xdr and ed25519 signing
-    
+
     let _network_passphrase = match network {
         "mainnet" => "Public Global Stellar Network ; September 2015",
         _ => "Test SDF Network ; September 2015",
     };
-    
+
     // Mock signing - in reality this would involve:
     // 1. Decode the transaction XDR
     // 2. Hash the transaction with network passphrase
     // 3. Sign with ed25519 private key
     // 4. Create TransactionEnvelope with signature
     // 5. Re-encode to XDR
-    
+
     let signed_mock = format!("signed_{}_with_{}", transaction_xdr, &secret_key[..8]);
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(signed_mock))
 }

@@ -1,0 +1,56 @@
+# cargo-deny configuration for StarForge
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+]
+
+[advisories]
+version = 2
+ignore = [
+    # ring 0.16.x pulled in transitively via pinned ureq =2.7.1; no upgrade path.
+    "RUSTSEC-2025-0009",
+    "RUSTSEC-2025-0010",
+    # rustls-webpki 0.100/0.101 pulled in transitively via pinned ureq =2.7.1.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    # number_prefix unmaintained; pulled in via indicatif. No safe upgrade.
+    "RUSTSEC-2025-0119",
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "Zlib",
+    "OpenSSL",
+]
+
+# ring 0.16.x has no license field; clarify it manually.
+[[licenses.clarify]]
+name = "ring"
+version = "=0.16.20"
+expression = "OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
