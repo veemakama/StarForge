@@ -20,6 +20,18 @@ pub struct MonitorArgs {
     #[arg(long)]
     pub follow: bool,
 
+    /// Soroban event type filter (contract, system, diagnostic)
+    #[arg(long = "type")]
+    pub event_type: Option<String>,
+
+    /// Topic filter: comma-separated segment matchers (* wildcards supported)
+    #[arg(long)]
+    pub topic: Option<String>,
+
+    /// Match emitted event value (substring match on JSON payload)
+    #[arg(long)]
+    pub value: Option<String>,
+
     /// Wallet name from starforge config to monitor
     #[arg(long)]
     pub wallet: Option<String>,
@@ -27,6 +39,10 @@ pub struct MonitorArgs {
     /// Threshold amount in XLM to trigger a notification (wallet mode)
     #[arg(long)]
     pub threshold: Option<f64>,
+
+    /// Alert when wallet XLM balance drops below this amount (watchman)
+    #[arg(long)]
+    pub balance_alert: Option<f64>,
 
     /// Network to use (overrides config)
     #[arg(long)]
