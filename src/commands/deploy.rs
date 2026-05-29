@@ -1,4 +1,5 @@
-use crate::utils::{config, horizon, optimizer, print as p};
+use crate::commands::info;
+use crate::utils::{config, horizon, optimizer, print as p, soroban};
 use anyhow::Result;
 use clap::Args;
 use colored::*;
@@ -9,6 +10,11 @@ use std::process::Command;
 
 const SOROBAN_WASM_LIMIT_KB: f64 = 128.0;
 
+/// Deploy a compiled Soroban WASM artifact to testnet or mainnet.
+///
+/// By default StarForge performs a dry-run: it validates the WASM, checks the
+/// wallet on Horizon, prints the Stellar CLI command, and optionally simulates
+/// fees with `--simulate`. Pass `--execute` to run `stellar contract deploy`.
 #[derive(Args)]
 pub struct DeployArgs {
     /// Path to the compiled .wasm file
@@ -29,6 +35,9 @@ pub struct DeployArgs {
     /// Execute deployment immediately if Stellar CLI is installed
     #[arg(long, default_value = "false")]
     pub execute: bool,
+    /// Simulate deploy transaction via Soroban RPC before confirmation
+    #[arg(long, default_value = "false")]
+    pub simulate: bool,
 }
 
 fn is_wasm_above_size_limit(wasm_size_kb: f64) -> bool {
@@ -143,6 +152,8 @@ pub fn handle(args: DeployArgs) -> Result<()> {
     p::kv_accent("Public Key", &wallet.public_key);
     p::separator();
 
+    let wasm_hash = compute_local_wasm_hash(&wasm_bytes);
+
     if args.simulate {
         p::info("Simulating deploy transaction via Soroban RPC...");
         match soroban::simulate_deploy_transaction(&wasm_hash, &args.network, wallet) {
@@ -205,9 +216,7 @@ pub fn handle(args: DeployArgs) -> Result<()> {
         .unwrap_or("0");
 
     pb.inc(1);
-    pb.set_message("Calculating WASM SHA-256 hash...");
-
-    let wasm_hash = compute_local_wasm_hash(&wasm_bytes);
+    pb.set_message("Recording WASM SHA-256 hash...");
 
     pb.inc(1);
     pb.set_message("Generating stellar CLI command...");
@@ -241,7 +250,7 @@ pub fn handle(args: DeployArgs) -> Result<()> {
             "Executing with Stellar CLI at {}",
             stellar_path.display()
         ));
-        let cmd_args = build_stellar_deploy_args(&args.wasm, &wallet.public_key, &args.network);
+        let cmd_args = build_stellar_deploy_args(&wasm_path, &wallet.public_key, &args.network);
         let output = Command::new(stellar_path).args(&cmd_args).output()?;
         if output.status.success() {
             p::success("Deployment command executed successfully.");
@@ -412,5 +421,19 @@ mod tests {
         assert!(!is_wasm_above_size_limit(127.9));
         assert!(!is_wasm_above_size_limit(128.0));
         assert!(is_wasm_above_size_limit(128.1));
+    }
+
+    #[test]
+    fn deploy_args_support_simulate_flag() {
+        let args = DeployArgs {
+            wasm: PathBuf::from("contract.wasm"),
+            network: "testnet".to_string(),
+            wallet: None,
+            optimize: false,
+            yes: false,
+            execute: false,
+            simulate: true,
+        };
+        assert!(args.simulate);
     }
 }
