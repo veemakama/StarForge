@@ -796,6 +796,7 @@ Update these files when adding features:
 - Explain WHY, not just WHAT
 - Keep examples up-to-date
 - Add diagrams for complex flows
+- Update [docs/COMMAND_REFERENCE.md](docs/COMMAND_REFERENCE.md) when adding or renaming CLI subcommands
 
 ---
 
