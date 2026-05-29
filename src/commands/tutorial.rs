@@ -10,6 +10,8 @@ pub enum TutorialCommands {
     List,
     /// Start a tutorial by slug (e.g. hello-world)
     Start { slug: String },
+    /// Advance to the next tutorial step
+    Next,
     /// Show current tutorial status
     Status,
 }
@@ -18,6 +20,7 @@ pub fn handle(cmd: TutorialCommands) -> Result<()> {
     match cmd {
         TutorialCommands::List => list(),
         TutorialCommands::Start { slug } => start(slug),
+        TutorialCommands::Next => next(),
         TutorialCommands::Status => status(),
     }
 }
@@ -28,73 +31,106 @@ fn repo_root() -> Result<PathBuf> {
 
 fn list() -> Result<()> {
     let root = repo_root()?;
-    let dir = tutorial_engine::tutorials_dir(&root);
     p::header("Tutorials");
 
-    if !dir.exists() {
-        p::warn(&format!(
-            "No tutorials directory found at {}",
-            dir.display()
-        ));
-        return Ok(());
-    }
-
-    let mut entries: Vec<_> = std::fs::read_dir(&dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    if entries.is_empty() {
+    let slugs = tutorial_engine::list_tutorial_slugs(&root)?;
+    if slugs.is_empty() {
         p::info("No tutorials installed yet.");
         return Ok(());
     }
 
     p::separator();
-    for (i, entry) in entries.iter().enumerate() {
-        let slug = entry.file_name().to_string_lossy().to_string();
-        println!("  {:>2}. {}", i + 1, slug.cyan().bold());
+    for (i, slug) in slugs.iter().enumerate() {
+        let title = tutorial_engine::load_tutorial(&root, slug)
+            .map(|t| t.title)
+            .unwrap_or_else(|_| slug.clone());
+        println!(
+            "  {:>2}. {} — {}",
+            i + 1,
+            slug.cyan().bold(),
+            title.dimmed()
+        );
     }
     p::separator();
+    p::info("Start with: starforge tutorial start hello-world");
     Ok(())
 }
 
 fn start(slug: String) -> Result<()> {
     let root = repo_root()?;
-    let dir = tutorial_engine::tutorials_dir(&root).join(&slug);
-    if !dir.exists() {
-        anyhow::bail!(
-            "Tutorial '{}' not found. Run {} to see available tutorials.",
-            slug,
-            "starforge tutorial list".cyan()
-        );
-    }
+    let tutorial = tutorial_engine::load_tutorial(&root, &slug)?;
 
     let mut status = tutorial_engine::load_status()?;
     status.active = Some(slug.clone());
     status.started_at = Some(chrono::Utc::now().to_rfc3339());
+    status.current_step = 0;
+    status.completed_steps.clear();
     tutorial_engine::save_status(&status)?;
 
-    p::header(&format!("Tutorial: {}", slug));
+    p::header(&format!("Tutorial: {}", tutorial.title));
+    if let Some(desc) = &tutorial.description {
+        println!("  {}", desc.dimmed());
+    }
     p::separator();
-    p::info("This is an initial interactive tutorial scaffold.");
-    p::info(&format!(
-        "Open the tutorial content in: {}",
-        dir.display().to_string().cyan()
-    ));
+    print_current_step(&tutorial, &status);
+    p::info("Advance with: starforge tutorial next");
     p::info("Track progress with: starforge tutorial status");
     Ok(())
 }
 
+fn next() -> Result<()> {
+    let root = repo_root()?;
+    let mut status = tutorial_engine::load_status()?;
+    let slug = status
+        .active
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("No active tutorial. Run starforge tutorial start <slug>"))?;
+    let tutorial = tutorial_engine::load_tutorial(&root, &slug)?;
+
+    if !status.completed_steps.contains(&status.current_step) {
+        status.completed_steps.push(status.current_step);
+    }
+
+    if status.current_step + 1 >= tutorial.steps.len() {
+        p::success("Tutorial complete! You reached the final milestone.");
+        status.active = None;
+        status.current_step = 0;
+        tutorial_engine::save_status(&status)?;
+        return Ok(());
+    }
+
+    status.current_step += 1;
+    tutorial_engine::save_status(&status)?;
+
+    p::header(&format!("Tutorial: {}", tutorial.title));
+    print_current_step(&tutorial, &status);
+    p::info("Run the suggested command in your terminal, then `starforge tutorial next` again.");
+    Ok(())
+}
+
 fn status() -> Result<()> {
+    let root = repo_root()?;
     let status = tutorial_engine::load_status()?;
     p::header("Tutorial Status");
+
     match status.active {
-        Some(active) => {
-            p::kv_accent("Active", &active);
-            if let Some(ts) = status.started_at {
-                p::kv("Started", &ts);
+        Some(ref active) => {
+            let tutorial = tutorial_engine::load_tutorial(&root, active)?;
+            p::kv_accent("Active", active);
+            if let Some(ts) = &status.started_at {
+                p::kv("Started", ts);
             }
+            p::kv(
+                "Progress",
+                &format!(
+                    "step {} of {} ({} completed)",
+                    status.current_step + 1,
+                    tutorial.steps.len(),
+                    status.completed_steps.len()
+                ),
+            );
+            p::separator();
+            print_current_step(&tutorial, &status);
         }
         None => {
             p::info(&format!(
@@ -104,4 +140,13 @@ fn status() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_current_step(tutorial: &tutorial_engine::TutorialDefinition, status: &tutorial_engine::TutorialStatus) {
+    let step_index = status.current_step.min(tutorial.steps.len().saturating_sub(1));
+    let step = &tutorial.steps[step_index];
+    let body = tutorial_engine::render_step(step, step_index, tutorial.steps.len());
+    for line in body.lines() {
+        println!("  {}", line.white());
+    }
 }

@@ -183,7 +183,16 @@ run_test "template search" "$STARFORGE template search counter"
 
 echo ""
 echo -e "${BLUE}──────────────────────────────────────────────────────${NC}"
-echo -e "${BLUE}5. Other Command Tests${NC}"
+echo -e "${BLUE}5. Tutorial Command Tests${NC}"
+echo -e "${BLUE}──────────────────────────────────────────────────────${NC}"
+echo ""
+
+# Test: tutorial list (no active tutorial required)
+run_test "tutorial list" "$STARFORGE tutorial list"
+
+echo ""
+echo -e "${BLUE}──────────────────────────────────────────────────────${NC}"
+echo -e "${BLUE}6. Other Command Tests${NC}"
 echo -e "${BLUE}──────────────────────────────────────────────────────${NC}"
 echo ""
 

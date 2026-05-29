@@ -42,3 +42,16 @@ jobs:
         run: cargo test --locked
       - name: Clippy
         run: cargo clippy --locked -- -D warnings
+
+  smoke:
+    name: CLI Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --locked
+      - name: Rust smoke tests
+        run: cargo test --test cli_smoke --locked
+      - name: Shell smoke script
+        run: ./scripts/e2e-smoke.sh

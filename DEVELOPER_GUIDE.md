@@ -635,6 +635,17 @@ fn test_config_lifecycle() {
 }
 ```
 
+### CLI smoke tests
+
+Fast regression checks for core commands live in `tests/cli_smoke.rs` and
+`scripts/e2e-smoke.sh`. CI runs both after every build:
+
+```bash
+cargo test --test cli_smoke
+./scripts/e2e-smoke.sh
+STARFORGE_E2E=1 ./scripts/e2e-smoke.sh   # optional network checks
+```
+
 ### Running Tests
 
 ```bash
@@ -796,6 +807,7 @@ Update these files when adding features:
 - Explain WHY, not just WHAT
 - Keep examples up-to-date
 - Add diagrams for complex flows
+- Update [docs/COMMAND_REFERENCE.md](docs/COMMAND_REFERENCE.md) when adding or renaming CLI subcommands
 
 ---
 

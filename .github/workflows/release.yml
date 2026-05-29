@@ -10,24 +10,82 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.archive_name }}.${{ matrix.archive_ext }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 — native
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_name: starforge-linux-x86_64
+            archive_ext: tar.gz
+
+          # macOS ARM64 — native on macos-latest (M1 runner)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive_name: starforge-macos-aarch64
+            archive_ext: tar.gz
+
+          # Windows x86_64 — native
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_name: starforge-windows-x86_64
+            archive_ext: zip
+
+          # Linux ARM64 — cross-compiled using `cross`
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive_name: starforge-linux-aarch64
+            archive_ext: tar.gz
+
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Only runs for the aarch64-unknown-linux-gnu matrix entry
+      - name: Install aarch64 Linux cross-linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      # Tells cargo which linker to use when targeting aarch64 Linux
+      - name: Configure cargo linker for aarch64 Linux
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
       - name: Build
-        run: cargo build --release --locked
-      - name: Package binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Linux and macOS produce .tar.gz
+      - name: Package binary (Linux / macOS)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/release/starforge dist/starforge
           tar -czf dist/starforge-linux-x86_64.tar.gz -C dist starforge
+          cd dist
+          sha256sum starforge-linux-x86_64.tar.gz > checksums.txt
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: starforge-linux-x86_64
-          path: dist/starforge-linux-x86_64.tar.gz
+          path: |
+            dist/starforge-linux-x86_64.tar.gz
+            dist/checksums.txt
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/starforge-linux-x86_64.tar.gz
+          files: |
+            dist/starforge-linux-x86_64.tar.gz
+            dist/checksums.txt
 

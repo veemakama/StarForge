@@ -503,6 +503,8 @@ fn handle_history(args: HistoryArgs) -> Result<()> {
     let filter = horizon::TxFilter {
         limit,
         cursor: args.cursor,
+        order: None,
+        type_filter: None,
         after: args.after,
         before: args.before,
         order: None,

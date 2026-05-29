@@ -51,3 +51,8 @@ digest.
 > the deployer's address and a salt, not from the WASM hash directly.  The
 > WASM hash is used to deduplicate uploaded code — uploading the same bytes
 > twice is a no-op on Soroban.
+
+### Used by smoke and unit tests
+
+`minimal.wasm` supports deploy hash unit tests in `src/commands/deploy.rs`.
+Broader CLI smoke coverage lives in `tests/cli_smoke.rs` and `scripts/e2e-smoke.sh`.

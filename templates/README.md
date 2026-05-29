@@ -83,6 +83,13 @@ To be valid, a template must contain:
 - `src/` directory - Source code
 - `src/lib.rs` - Main contract file
 
+## Example Templates
+
+Built-in example templates are provided under `templates/examples/`:
+
+- `simple-counter`: A basic smart contract demonstrating storage usage by incrementing, getting, and resetting a counter.
+- `token-allowlist`: A smart contract for managing an allowlist of approved addresses, controlled by an administrator.
+
 ## Template Placeholders
 
 Templates can use placeholders that will be replaced during scaffolding:

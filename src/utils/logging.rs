@@ -123,6 +123,39 @@ pub fn init(config: LogConfig) -> Result<()> {
     Ok(())
 }
 
+/// Redact a public Stellar key unless the current log level is debug or trace.
+///
+/// Public keys are safe to display to users, but log streams should avoid
+/// including raw account IDs in info-level logs unless the log level is explicitly
+/// opted into debug.
+pub fn redact_public_key(public_key: &str, level: Level) -> String {
+    if matches!(level, Level::DEBUG | Level::TRACE) {
+        public_key.to_string()
+    } else if public_key.len() > 8 {
+        let prefix = &public_key[..4];
+        let suffix = &public_key[public_key.len().saturating_sub(4)..];
+        format!("{}...{}", prefix, suffix)
+    } else {
+        "[REDACTED]".to_string()
+    }
+}
+
+/// Always redact secret values when they are written to logs.
+///
+/// Secret keys and passphrases should never appear in info-level or debug-level
+/// logs.
+pub fn redact_secret_value(_value: &str) -> &'static str {
+    "[REDACTED]"
+}
+
+/// Always redact signed XDR payloads when they are written to logs.
+///
+/// XDR envelopes containing signatures are secret and must not be emitted at
+/// info level.
+pub fn redact_signed_xdr(_xdr: &str) -> &'static str {
+    "[REDACTED]"
+}
+
 /// Build a `LogConfig` from CLI flags / environment.
 ///
 /// - `--log-format json` → `LogFormat::Json`
@@ -138,5 +171,39 @@ pub fn config_from_env(format: Option<&str>, log_dir: Option<std::path::PathBuf>
         format,
         log_dir,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing::Level;
+
+    #[test]
+    fn redact_public_key_hides_value_at_info_level() {
+        let key = "GDRXMZDQW34QHX6F5U6FFWJZZZDQ4KYWJO65HS4CUT62X7Y7RXYWXE4T";
+        let redacted = redact_public_key(key, Level::INFO);
+
+        assert!(redacted.starts_with("GDRX"));
+        assert!(redacted.ends_with("4T"));
+        assert!(redacted.contains("..."));
+        assert_ne!(redacted, key);
+    }
+
+    #[test]
+    fn redact_public_key_returns_full_value_at_debug_level() {
+        let key = "GDRXMZDQW34QHX6F5U6FFWJZZZDQ4KYWJO65HS4CUT62X7Y7RXYWXE4T";
+        assert_eq!(redact_public_key(key, Level::DEBUG), key);
+        assert_eq!(redact_public_key(key, Level::TRACE), key);
+    }
+
+    #[test]
+    fn redact_secret_value_always_redacts() {
+        assert_eq!(redact_secret_value("super-secret"), "[REDACTED]");
+    }
+
+    #[test]
+    fn redact_signed_xdr_always_redacts() {
+        assert_eq!(redact_signed_xdr("signed-xdr-payload"), "[REDACTED]");
     }
 }

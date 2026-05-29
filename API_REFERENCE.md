@@ -2,6 +2,8 @@
 
 Complete reference for all StarForge commands, options, and utilities.
 
+> For a concise, navigable index of every CLI subcommand see [docs/COMMAND_REFERENCE.md](docs/COMMAND_REFERENCE.md).
+
 ## Table of Contents
 
 1. [Command Line Interface](#command-line-interface)
@@ -660,6 +662,8 @@ starforge deploy --wasm <FILE> [OPTIONS]
 - `--wasm <FILE>` - Path to compiled .wasm file (required)
 - `--network <NETWORK>` - Network to deploy to (`testnet`, `mainnet`)
 - `--wallet <NAME>` - Wallet name to use for deployment
+- `--optimize` - Run built-in WASM optimizer before deployment prep
+- `--simulate` - Simulate deploy via Soroban RPC (fee estimate, error check)
 - `--yes` - Skip confirmation prompt
 - `--execute` - Execute `stellar contract deploy ...` when `stellar` CLI is on PATH (default is dry-run)
 
@@ -676,6 +680,9 @@ starforge deploy \
 
 # Skip confirmation (for CI)
 starforge deploy --wasm ./my_contract.wasm --yes
+
+# Simulate fees before confirming
+starforge deploy --wasm ./my_contract.wasm --simulate --wallet deployer
 
 # Execute immediately (requires stellar CLI on PATH)
 starforge deploy --wasm ./my_contract.wasm --execute
