@@ -71,24 +71,21 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          tar -czf dist/${{ matrix.archive_name }}.${{ matrix.archive_ext }} \
-            -C target/${{ matrix.target }}/release starforge
-
-      # Windows produces .zip — uses PowerShell
-      - name: Package binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Compress-Archive -Path "target\${{ matrix.target }}\release\starforge.exe" -DestinationPath "dist\${{ matrix.archive_name }}.${{ matrix.archive_ext }}"
-
+          cp target/release/starforge dist/starforge
+          tar -czf dist/starforge-linux-x86_64.tar.gz -C dist starforge
+          cd dist
+          sha256sum starforge-linux-x86_64.tar.gz > checksums.txt
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive_name }}
-          path: dist/${{ matrix.archive_name }}.${{ matrix.archive_ext }}
-
+          name: starforge-linux-x86_64
+          path: |
+            dist/starforge-linux-x86_64.tar.gz
+            dist/checksums.txt
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.archive_name }}.${{ matrix.archive_ext }}
+          files: |
+            dist/starforge-linux-x86_64.tar.gz
+            dist/checksums.txt
+

@@ -49,15 +49,30 @@ The local hash shown by `starforge deploy` is intended to match the value report
 
 ## Installation
 
-### Prerequisites
+### Quick Install (macOS / Linux)
 
-- Rust = 1.80 ([install via rustup](https://rustup.rs))
+You can install the latest release binary using the installation script:
+
+```bash
+curl -sL https://raw.githubusercontent.com/Josetic224/StarForge/main/install.sh | bash
+```
+
+### Homebrew (macOS / Linux)
+
+A draft Homebrew formula is available for testing:
+
+```bash
+brew install Josetic224/starforge/starforge
+```
 
 ### Build from source
 
+**Prerequisites:**
+- Rust >= 1.80 ([install via rustup](https://rustup.rs))
+
 ```bash
-git clone https://github.com/YOUR_USERNAME/starforge.git
-cd starforge
+git clone https://github.com/Josetic224/StarForge.git
+cd StarForge
 cargo build --release
 
 # Move the binary to your PATH
