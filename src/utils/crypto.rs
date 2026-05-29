@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, Result};
-use argon2::Argon2;
+use argon2::{Argon2, Params};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use colored::Colorize;
 use dialoguer::Password;
@@ -212,6 +212,73 @@ pub fn prompt_passphrase(prompt: &str, strict: bool) -> Result<String> {
     }
 }
 
+// ── Argon2 KDF tuning ─────────────────────────────────────────────────────────
+
+/// Optional Argon2 parameters for wallet encryption (`m_cost` / `t_cost`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KdfOptions {
+    /// Memory cost in KiB blocks (`m_cost`). Uses the Argon2 default when unset.
+    pub mem: Option<u32>,
+    /// Iteration count (`t_cost`). Uses the Argon2 default when unset.
+    pub iterations: Option<u32>,
+}
+
+impl KdfOptions {
+    /// True when both fields are unset (library defaults apply).
+    pub fn is_default(&self) -> bool {
+        self.mem.is_none() && self.iterations.is_none()
+    }
+}
+
+fn resolve_params(options: Option<&KdfOptions>) -> Result<Params> {
+    let defaults = Params::default();
+    let m_cost = options
+        .and_then(|o| o.mem)
+        .unwrap_or_else(|| defaults.m_cost());
+    let t_cost = options
+        .and_then(|o| o.iterations)
+        .unwrap_or_else(|| defaults.t_cost());
+    Params::new(m_cost, t_cost, defaults.p_cost(), None)
+        .map_err(|e| anyhow!("Invalid Argon2 parameters: {}", e))
+}
+
+fn argon2_from_params(params: &Params) -> Argon2<'_> {
+    Argon2::from(params.clone())
+}
+
+fn parse_encrypted_bundle(bundle: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Option<KdfOptions>)> {
+    let parts: Vec<&str> = bundle.split(':').collect();
+    match parts.len() {
+        3 => {
+            let salt = BASE64.decode(parts[0])?;
+            let nonce_bytes = BASE64.decode(parts[1])?;
+            let ciphertext = BASE64.decode(parts[2])?;
+            Ok((salt, nonce_bytes, ciphertext, None))
+        }
+        5 => {
+            let salt = BASE64.decode(parts[0])?;
+            let nonce_bytes = BASE64.decode(parts[1])?;
+            let ciphertext = BASE64.decode(parts[2])?;
+            let mem = parts[3]
+                .parse::<u32>()
+                .map_err(|_| anyhow!("Invalid encrypted bundle: bad mem cost"))?;
+            let iterations = parts[4]
+                .parse::<u32>()
+                .map_err(|_| anyhow!("Invalid encrypted bundle: bad iteration count"))?;
+            Ok((
+                salt,
+                nonce_bytes,
+                ciphertext,
+                Some(KdfOptions {
+                    mem: Some(mem),
+                    iterations: Some(iterations),
+                }),
+            ))
+        }
+        _ => anyhow::bail!("Invalid encrypted bundle format"),
+    }
+}
+
 // ── Password prompt (for decryption / non-creation flows) ────────────────────
 
 pub fn prompt_password(prompt: &str, confirm: bool) -> Result<String> {
@@ -230,11 +297,12 @@ pub fn prompt_password(prompt: &str, confirm: bool) -> Result<String> {
     Ok(pwd)
 }
 
-pub fn encrypt_secret(password: &str, secret: &str) -> Result<String> {
+pub fn encrypt_secret(password: &str, secret: &str, kdf: Option<&KdfOptions>) -> Result<String> {
     let mut salt = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
 
-    let argon2 = Argon2::default();
+    let params = resolve_params(kdf)?;
+    let argon2 = argon2_from_params(&params);
     let mut key = [0u8; 32];
     argon2
         .hash_password_into(password.as_bytes(), &salt, &mut key)
@@ -252,23 +320,29 @@ pub fn encrypt_secret(password: &str, secret: &str) -> Result<String> {
     let encoded_salt = BASE64.encode(salt);
     let encoded_nonce = BASE64.encode(nonce_bytes);
     let encoded_cipher = BASE64.encode(ciphertext);
-    Ok(format!(
-        "{}:{}:{}",
-        encoded_salt, encoded_nonce, encoded_cipher
-    ))
+
+    if params == Params::default() {
+        Ok(format!(
+            "{}:{}:{}",
+            encoded_salt, encoded_nonce, encoded_cipher
+        ))
+    } else {
+        Ok(format!(
+            "{}:{}:{}:{}:{}",
+            encoded_salt,
+            encoded_nonce,
+            encoded_cipher,
+            params.m_cost(),
+            params.t_cost()
+        ))
+    }
 }
 
 pub fn decrypt_secret(password: &str, bundle: &str) -> Result<String> {
-    let parts: Vec<&str> = bundle.split(':').collect();
-    if parts.len() != 3 {
-        anyhow::bail!("Invalid encrypted bundle format");
-    }
+    let (salt, nonce_bytes, ciphertext, kdf) = parse_encrypted_bundle(bundle)?;
 
-    let salt = BASE64.decode(parts[0])?;
-    let nonce_bytes = BASE64.decode(parts[1])?;
-    let ciphertext = BASE64.decode(parts[2])?;
-
-    let argon2 = Argon2::default();
+    let params = resolve_params(kdf.as_ref())?;
+    let argon2 = argon2_from_params(&params);
     let mut key = [0u8; 32];
     argon2
         .hash_password_into(password.as_bytes(), &salt, &mut key)
@@ -293,7 +367,7 @@ mod tests {
         let password = "my_super_secret_password";
         let secret = "SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 
-        let encrypted = encrypt_secret(password, secret).unwrap();
+        let encrypted = encrypt_secret(password, secret, None).unwrap();
         assert_ne!(secret, encrypted);
         assert!(encrypted.contains(':'));
 
@@ -371,5 +445,34 @@ mod tests {
     #[test]
     fn strict_threshold_constant_is_three() {
         assert_eq!(STRICT_MIN_SCORE, 3);
+    }
+
+    #[test]
+    fn custom_kdf_params_roundtrip() {
+        let password = "my_super_secret_password";
+        let secret = "SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let kdf = KdfOptions {
+            mem: Some(32_768),
+            iterations: Some(4),
+        };
+
+        let encrypted = encrypt_secret(password, secret, Some(&kdf)).unwrap();
+        let parts: Vec<&str> = encrypted.split(':').collect();
+        assert_eq!(parts.len(), 5, "expected mem/iterations in bundle");
+
+        let decrypted = decrypt_secret(password, &encrypted).unwrap();
+        assert_eq!(secret, decrypted);
+    }
+
+    #[test]
+    fn legacy_three_part_bundle_uses_default_kdf() {
+        let password = "my_super_secret_password";
+        let secret = "SXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let encrypted = encrypt_secret(password, secret, None).unwrap();
+        let parts: Vec<&str> = encrypted.split(':').collect();
+        assert_eq!(parts.len(), 3);
+
+        let decrypted = decrypt_secret(password, &encrypted).unwrap();
+        assert_eq!(secret, decrypted);
     }
 }

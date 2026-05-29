@@ -62,6 +62,12 @@ pub enum WalletCommands {
         /// (requires --encrypt)
         #[arg(long, default_value = "false", requires = "encrypt")]
         strict: bool,
+        /// Argon2 memory cost in KiB (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        mem: Option<u32>,
+        /// Argon2 iteration count (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        iterations: Option<u32>,
     },
     /// List all saved wallets
     List,
@@ -98,6 +104,12 @@ pub enum WalletCommands {
         /// Encrypt the replacement secret key with a passphrase at rest
         #[arg(long, default_value = "false")]
         encrypt: bool,
+        /// Argon2 memory cost in KiB (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        mem: Option<u32>,
+        /// Argon2 iteration count (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        iterations: Option<u32>,
     },
     /// Export a wallet to a JSON backup file
     Export {
@@ -215,7 +227,9 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             network,
             encrypt,
             strict,
-        } => create(name, fund, network, encrypt, strict),
+            mem,
+            iterations,
+        } => create(name, fund, network, encrypt, strict, mem, iterations),
         WalletCommands::List => list(),
         WalletCommands::Show { name, reveal } => show(name, reveal),
         WalletCommands::Fund { name } => fund_wallet(name),
@@ -226,7 +240,9 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             fund,
             network,
             encrypt,
-        } => rotate_wallet(name, fund, network, encrypt),
+            mem,
+            iterations,
+        } => rotate_wallet(name, fund, network, encrypt, mem, iterations),
         WalletCommands::Export { name, output } => export_wallet(name, output),
         WalletCommands::Import { file } => import_wallets(file),
         WalletCommands::Connect { device } => connect_hardware(device),
@@ -351,12 +367,22 @@ fn generate_keypair() -> (String, String) {
     (public_key, secret_key)
 }
 
+fn kdf_options(mem: Option<u32>, iterations: Option<u32>) -> Option<crypto::KdfOptions> {
+    if mem.is_none() && iterations.is_none() {
+        None
+    } else {
+        Some(crypto::KdfOptions { mem, iterations })
+    }
+}
+
 fn create(
     name: String,
     fund: bool,
     network_override: Option<String>,
     encrypt: bool,
     strict: bool,
+    mem: Option<u32>,
+    iterations: Option<u32>,
 ) -> Result<()> {
     let mut cfg = config::load()?;
 
@@ -394,7 +420,7 @@ fn create(
         }
         println!();
         let pwd = crypto::prompt_passphrase("Set a passphrase to encrypt this wallet", strict)?;
-        crypto::encrypt_secret(&pwd, &secret_key)?
+        crypto::encrypt_secret(&pwd, &secret_key, kdf_options(mem, iterations).as_ref())?
     } else {
         secret_key.clone()
     };
@@ -630,6 +656,8 @@ fn rotate_wallet(
     fund: bool,
     network_override: Option<String>,
     encrypt: bool,
+    mem: Option<u32>,
+    iterations: Option<u32>,
 ) -> Result<()> {
     config::validate_wallet_name(&name)?;
     let mut cfg = config::load()?;
@@ -657,7 +685,7 @@ fn rotate_wallet(
             "Set a secure passphrase to encrypt the rotated wallet",
             true,
         )?;
-        crypto::encrypt_secret(&pwd, &secret_key)?
+        crypto::encrypt_secret(&pwd, &secret_key, kdf_options(mem, iterations).as_ref())?
     } else {
         secret_key.clone()
     };
