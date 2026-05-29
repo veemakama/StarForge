@@ -53,6 +53,9 @@ enum Commands {
     /// View or switch the active network (testnet/mainnet)
     #[command(subcommand)]
     Network(commands::network::NetworkCommands),
+    /// Local Soroban devnet (Docker quickstart)
+    #[command(subcommand)]
+    Node(commands::node::NodeCommands),
     /// Generate shell completions for bash, zsh, and fish
     #[command(subcommand)]
     Completions(commands::completions::CompletionShell),
@@ -119,6 +122,7 @@ fn main() {
         Commands::Info => "info",
         Commands::Tx(_) => "tx",
         Commands::Network(_) => "network",
+        Commands::Node(_) => "node",
         Commands::Completions(_) => "completions",
         Commands::Shell(_) => "shell",
         Commands::Monitor(_) => "monitor",
@@ -144,6 +148,7 @@ fn main() {
         Commands::Info => commands::info::handle(),
         Commands::Tx(args) => commands::tx::handle(args),
         Commands::Network(cmd) => commands::network::handle(cmd),
+        Commands::Node(cmd) => commands::node::handle(cmd),
         Commands::Completions(shell) => commands::completions::handle(shell),
         Commands::Shell(args) => commands::shell::handle(args),
         Commands::Monitor(args) => commands::monitor::handle(args),
@@ -153,7 +158,7 @@ fn main() {
         Commands::Gas(args) => commands::gas::handle(args),
         Commands::Plugin(args) => commands::plugin::handle(args),
         Commands::Template(args) => commands::template::handle(args),
-        Commands::Upgrade(args) => commands::upgrade::handle(args),
+        Commands::Upgrade(cmd) => commands::upgrade::handle(cmd),
         Commands::Lint(args) => commands::lint::handle(args),
         Commands::External(args) => handle_external_plugin(args),
     };

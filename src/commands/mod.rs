@@ -10,6 +10,7 @@ pub mod lint;
 pub mod monitor;
 pub mod network;
 pub mod new;
+pub mod node;
 pub mod plugin;
 pub mod shell;
 pub mod template;

@@ -321,6 +321,41 @@ To contribute templates to the official registry:
 4. Submit a PR adding your template to `templates/registry.json`
 5. Include examples and usage instructions
 
+## Template Cache
+
+Marketplace templates are cloned with `--depth 1` (shallow clone) and stored in
+`~/.starforge/template-cache/<name>/`.  On subsequent runs the cached copy is
+reused, so no network round-trip occurs.
+
+### Cache location
+
+```
+~/.starforge/template-cache/
+├── token-standard/     ← cached after first use
+├── lending-pool/
+└── uniswap-v2/
+```
+
+### Force-refresh
+
+Pass `--force-refresh` to delete the cached copy and re-clone:
+
+```bash
+starforge new contract my-token --template token-standard --force-refresh
+```
+
+This is useful when the upstream template has been updated and you want the
+latest version.
+
+### How it works
+
+1. `fetch_template_cached` checks `~/.starforge/template-cache/<name>/`.
+2. If the directory exists and `--force-refresh` is not set, it is used as-is.
+3. If `--force-refresh` is set (or the directory does not exist), the old cache
+   is removed and the template is re-cloned with `git clone --depth 1`.
+4. `template_source_content` reads `src/lib.rs` from the cached directory and
+   returns it to the scaffolding step.
+
 ## Support
 
 For issues or questions:

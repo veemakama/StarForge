@@ -80,51 +80,44 @@ pub fn handle(args: InvokeArgs) -> Result<()> {
 
     println!();
 
-    if args.simulate {
-        p::step(1, 1, "Simulating transaction...");
-        let result = soroban::simulate_transaction(
-            &args.contract_id,
-            &args.function,
-            &arg_list,
-            &arg_type_list,
-            network,
-        )?;
+    let submit_wallet = if args.simulate { None } else { Some(wallet) };
 
+    p::step(1, if args.simulate { 1 } else { 2 }, "Simulating transaction...");
+
+    let outcome = soroban::invoke_contract(
+        &args.contract_id,
+        &args.function,
+        &arg_list,
+        &arg_type_list,
+        network,
+        submit_wallet.map(|w| w as &crate::utils::config::WalletEntry),
+    )?;
+
+    println!();
+    p::success("Simulation successful!");
+    p::separator();
+    p::kv_accent("Return Value", &outcome.simulation.return_value);
+    p::kv("Estimated Fee", &format!("{} stroops", outcome.simulation.fee));
+
+    if !outcome.simulation.events.is_empty() {
         println!();
-        p::success("Simulation successful!");
-        p::separator();
-        p::kv_accent("Return Value", &result.return_value);
-        p::kv("Estimated Fee", &format!("{} stroops", result.fee));
-
-        if !result.events.is_empty() {
-            println!();
-            p::info(&format!("Events ({})", result.events.len()));
-            for (i, event) in result.events.iter().enumerate() {
-                p::kv(&format!("  [{}]", i), event);
-            }
+        p::info(&format!("Events ({})", outcome.simulation.events.len()));
+        for (i, event) in outcome.simulation.events.iter().enumerate() {
+            p::kv(&format!("  [{}]", i), event);
         }
-    } else {
-        p::step(1, 2, "Building and signing transaction...");
+    }
+
+    if let Some(tx) = outcome.transaction {
         p::step(2, 2, "Submitting to network...");
-
-        let result = soroban::submit_transaction(
-            &args.contract_id,
-            &args.function,
-            &arg_list,
-            &arg_type_list,
-            network,
-            wallet,
-        )?;
-
         println!();
         p::success("Transaction submitted successfully!");
         p::separator();
-        p::kv_accent("Transaction Hash", &result.hash);
-        p::kv_accent("Return Value", &result.return_value);
+        p::kv_accent("Transaction Hash", &tx.hash);
+        p::kv_accent("Return Value", &tx.return_value);
         println!();
         p::info(&format!(
             "View on Stellar Expert: https://stellar.expert/explorer/{}/tx/{}",
-            network, result.hash
+            network, tx.hash
         ));
     }
 

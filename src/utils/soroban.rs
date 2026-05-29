@@ -75,6 +75,31 @@ struct RpcLedgerEntry {
     live_until_ledger_seq: Option<u32>,
 }
 
+/// Unified entry-point used by both `commands::contract` and `commands::invoke`.
+///
+/// When `wallet` is `None` the call simulates only; when `Some` it simulates
+/// then submits and returns a `TransactionResult`.
+pub struct InvokeOutcome {
+    pub simulation: SimulationResult,
+    pub transaction: Option<TransactionResult>,
+}
+
+pub fn invoke_contract(
+    contract_id: &str,
+    function: &str,
+    args: &[String],
+    arg_types: &[String],
+    network: &str,
+    wallet: Option<&WalletEntry>,
+) -> Result<InvokeOutcome> {
+    let simulation = simulate_transaction(contract_id, function, args, arg_types, network)?;
+    let transaction = match wallet {
+        Some(w) => Some(submit_transaction(contract_id, function, args, arg_types, network, w)?),
+        None => None,
+    };
+    Ok(InvokeOutcome { simulation, transaction })
+}
+
 pub fn simulate_transaction(
     contract_id: &str,
     function: &str,
@@ -581,6 +606,129 @@ fn extract_rpc_error_message(error: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn read_fixture(filename: &str) -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("soroban_rpc")
+            .join(filename);
+        fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read fixture {}: {}", path.display(), e))
+    }
+
+    #[test]
+    fn test_parse_simulate_success() {
+        let fixture = read_fixture("simulate_success.json");
+        let response: SorobanRpcResponse<serde_json::Value> =
+            serde_json::from_str(&fixture).expect("failed to deserialize simulate_success.json");
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("missing result in response");
+
+        let return_value = decode_return_value(&result).unwrap();
+        assert_eq!(return_value, "success_value");
+
+        let fee = extract_fee(&result).unwrap();
+        assert_eq!(fee, 150000);
+
+        let events = extract_events(&result).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].contains("test_key"));
+        assert!(events[1].contains("test_key2"));
+
+        let errors = extract_simulation_errors(&result);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_simulate_error_top_level() {
+        let fixture = read_fixture("simulate_error_top_level.json");
+        let response: SorobanRpcResponse<serde_json::Value> =
+            serde_json::from_str(&fixture).expect("failed to deserialize simulate_error_top_level.json");
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("missing result in response");
+
+        let errors = extract_simulation_errors(&result);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0], "\"Simulation failed due to budget exceeded\"");
+    }
+
+    #[test]
+    fn test_parse_simulate_error_in_results() {
+        let fixture = read_fixture("simulate_error_in_results.json");
+        let response: SorobanRpcResponse<serde_json::Value> =
+            serde_json::from_str(&fixture).expect("failed to deserialize simulate_error_in_results.json");
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("missing result in response");
+
+        let errors = extract_simulation_errors(&result);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0], "\"Contract call panicked\"");
+    }
+
+    #[test]
+    fn test_parse_get_ledger_entries_success() {
+        let fixture = read_fixture("get_ledger_entries_success.json");
+        let response: SorobanRpcResponse<GetLedgerEntriesResult> =
+            serde_json::from_str(&fixture).expect("failed to deserialize get_ledger_entries_success.json");
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("missing result in response");
+
+        let inspect_res = parse_contract_inspect_result(
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABGHI",
+            "testnet",
+            result,
+        )
+        .unwrap();
+
+        assert_eq!(inspect_res.contract_id, "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABGHI");
+        assert_eq!(inspect_res.executable, "Wasm");
+        assert_eq!(inspect_res.wasm_hash, Some("mock_wasm_hash_placeholder".to_string()));
+        assert_eq!(inspect_res.storage_durability, "Persistent");
+        assert_eq!(inspect_res.latest_ledger, 42000);
+        assert_eq!(inspect_res.last_modified_ledger_seq, Some(41990));
+        assert_eq!(inspect_res.live_until_ledger_seq, Some(45000));
+        assert!(inspect_res.instance_storage.is_empty());
+    }
+
+    #[test]
+    fn test_parse_get_ledger_entries_empty() {
+        let fixture = read_fixture("get_ledger_entries_empty.json");
+        let response: SorobanRpcResponse<GetLedgerEntriesResult> =
+            serde_json::from_str(&fixture).expect("failed to deserialize get_ledger_entries_empty.json");
+
+        assert!(response.error.is_none());
+        let result = response.result.expect("missing result in response");
+
+        let err = parse_contract_inspect_result(
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABGHI",
+            "testnet",
+            result,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Contract 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABGHI' was not found on testnet."
+        );
+    }
+
+    #[test]
+    fn test_parse_rpc_error() {
+        let fixture = read_fixture("rpc_error.json");
+        let response: SorobanRpcResponse<serde_json::Value> =
+            serde_json::from_str(&fixture).expect("failed to deserialize rpc_error.json");
+
+        let error = response.error.expect("missing error in response");
+        let message = extract_rpc_error_message(&error);
+        assert_eq!(message, "Invalid request");
+    }
 
     #[test]
     fn builds_contract_instance_ledger_key() {
@@ -605,5 +753,74 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Expected a Stellar contract strkey"));
+    }
+
+    // ── ScVal arg encoding ──────────────────────────────────────────────
+
+    #[test]
+    fn encode_string_arg() {
+        let result = encode_arguments(&["hello".to_string()], &["string".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("hello"), "encoded string should contain the value");
+    }
+
+    #[test]
+    fn encode_symbol_arg() {
+        let result = encode_arguments(&["transfer".to_string()], &["symbol".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("transfer"));
+    }
+
+    #[test]
+    fn encode_int_arg() {
+        let result = encode_arguments(&["42".to_string()], &["int".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("42"));
+    }
+
+    #[test]
+    fn encode_bool_true_arg() {
+        let result = encode_arguments(&["true".to_string()], &["bool".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("true"));
+    }
+
+    #[test]
+    fn encode_bool_false_arg() {
+        let result = encode_arguments(&["false".to_string()], &["bool".to_string()]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].contains("false"));
+    }
+
+    #[test]
+    fn encode_multiple_args() {
+        let args = vec!["hello".to_string(), "99".to_string(), "true".to_string()];
+        let types = vec!["string".to_string(), "int".to_string(), "bool".to_string()];
+        let result = encode_arguments(&args, &types).unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn encode_empty_args() {
+        let result = encode_arguments(&[], &[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn encode_invalid_type_errors() {
+        let err = encode_arguments(&["x".to_string()], &["unknown_type".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("Unsupported argument type"));
+    }
+
+    #[test]
+    fn encode_invalid_int_errors() {
+        let err = encode_arguments(&["not_a_number".to_string()], &["int".to_string()]).unwrap_err();
+        assert!(err.to_string().len() > 0);
+    }
+
+    #[test]
+    fn encode_invalid_bool_errors() {
+        let err = encode_arguments(&["maybe".to_string()], &["bool".to_string()]).unwrap_err();
+        assert!(err.to_string().len() > 0);
     }
 }

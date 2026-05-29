@@ -41,6 +41,8 @@ sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 tracing-appender = "0.2"
+bip39 = { version = "2", features = ["rand", "std"] }
+hmac = "0.12"
 
 [features]
 hardware-wallet = ["dep:hidapi"]

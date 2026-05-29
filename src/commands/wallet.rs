@@ -1,4 +1,4 @@
-use crate::utils::{config, crypto, hardware_wallet, horizon, multisig, print as p};
+use crate::utils::{config, crypto, hardware_wallet, horizon, mnemonic, multisig, print as p};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Subcommand;
@@ -62,6 +62,15 @@ pub enum WalletCommands {
         /// (requires --encrypt)
         #[arg(long, default_value = "false", requires = "encrypt")]
         strict: bool,
+        /// Generate a BIP39 recovery phrase instead of a random key
+        #[arg(long, default_value = "false")]
+        mnemonic: bool,
+        /// Mnemonic length: 12 or 24 words (requires --mnemonic)
+        #[arg(long, default_value = "24", requires = "mnemonic", value_parser = ["12", "24"])]
+        words: String,
+        /// Account index for SEP-0005 path m/44'/148'/index' (requires --mnemonic)
+        #[arg(long, default_value = "0", requires = "mnemonic")]
+        account_index: u32,
     },
     /// List all saved wallets
     List,
@@ -85,6 +94,24 @@ pub enum WalletCommands {
     },
     /// Rename a wallet
     Rename { old_name: String, new_name: String },
+    /// Close a source account and send remaining XLM to a destination (account merge)
+    Merge {
+        /// Source wallet to close (must be saved in StarForge)
+        #[arg(long)]
+        from: String,
+        /// Destination public key or wallet name that receives the balance
+        #[arg(long)]
+        to: String,
+        /// Network to use (defaults to the source wallet's network)
+        #[arg(long, value_parser = ["testnet", "mainnet"])]
+        network: Option<String>,
+        /// Skip the confirmation prompt
+        #[arg(long, default_value = "false")]
+        yes: bool,
+        /// Remove the source wallet from local storage after a successful merge
+        #[arg(long, default_value = "false")]
+        remove_local: bool,
+    },
     /// Rotate a wallet in place while keeping the same logical name
     Rotate {
         /// Wallet name to rotate
@@ -98,6 +125,12 @@ pub enum WalletCommands {
         /// Encrypt the replacement secret key with a passphrase at rest
         #[arg(long, default_value = "false")]
         encrypt: bool,
+        /// Argon2 memory cost in KiB (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        mem: Option<u32>,
+        /// Argon2 iteration count (requires --encrypt)
+        #[arg(long, requires = "encrypt")]
+        iterations: Option<u32>,
     },
     /// Export a wallet to a JSON backup file
     Export {
@@ -107,11 +140,25 @@ pub enum WalletCommands {
         #[arg(long)]
         output: PathBuf,
     },
-    /// Import wallets from a JSON backup file
+    /// Import a wallet from a JSON backup or BIP39 recovery phrase
     Import {
+        /// Wallet name (required with --mnemonic)
+        name: Option<String>,
         /// Path to backup JSON file
-        #[arg(long)]
-        file: PathBuf,
+        #[arg(long, group = "source")]
+        file: Option<PathBuf>,
+        /// Import from a BIP39 recovery phrase (prompted interactively)
+        #[arg(long, group = "source")]
+        mnemonic: bool,
+        /// Account index for SEP-0005 path m/44'/148'/index'
+        #[arg(long, default_value = "0")]
+        account_index: u32,
+        /// Network to associate with this wallet
+        #[arg(long, value_parser = ["testnet", "mainnet"])]
+        network: Option<String>,
+        /// Encrypt the imported secret key with a passphrase at rest
+        #[arg(long, default_value = "false")]
+        encrypt: bool,
     },
 
     /// Connect to a hardware wallet (Ledger/Trezor) and show device info
@@ -215,20 +262,48 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             network,
             encrypt,
             strict,
-        } => create(name, fund, network, encrypt, strict),
+            mnemonic: use_mnemonic,
+            words,
+            account_index,
+        } => create(
+            name,
+            fund,
+            network,
+            encrypt,
+            strict,
+            use_mnemonic,
+            words,
+            account_index,
+        ),
         WalletCommands::List => list(),
         WalletCommands::Show { name, reveal } => show(name, reveal),
         WalletCommands::Fund { name } => fund_wallet(name),
         WalletCommands::Remove { name } => remove(name),
         WalletCommands::Rename { old_name, new_name } => rename(old_name, new_name),
+        WalletCommands::Merge {
+            from,
+            to,
+            network,
+            yes,
+            remove_local,
+        } => merge_wallet(from, to, network, yes, remove_local),
         WalletCommands::Rotate {
             name,
             fund,
             network,
             encrypt,
-        } => rotate_wallet(name, fund, network, encrypt),
+            mem,
+            iterations,
+        } => rotate_wallet(name, fund, network, encrypt, mem, iterations),
         WalletCommands::Export { name, output } => export_wallet(name, output),
-        WalletCommands::Import { file } => import_wallets(file),
+        WalletCommands::Import {
+            name,
+            file,
+            mnemonic: from_mnemonic,
+            account_index,
+            network,
+            encrypt,
+        } => import_wallet(name, file, from_mnemonic, account_index, network, encrypt),
         WalletCommands::Connect { device } => connect_hardware(device),
         WalletCommands::HwAddress { device, path } => hw_address(device, &path),
         WalletCommands::HwStatus { device } => hw_status(device),
@@ -351,12 +426,35 @@ fn generate_keypair() -> (String, String) {
     (public_key, secret_key)
 }
 
+fn parse_word_count(words: &str) -> Result<mnemonic::WordCount> {
+    match words {
+        "12" => Ok(mnemonic::WordCount::Words12),
+        "24" => Ok(mnemonic::WordCount::Words24),
+        _ => anyhow::bail!("--words must be 12 or 24"),
+    }
+}
+
+fn prompt_recovery_phrase() -> Result<String> {
+    use dialoguer::Input;
+    let phrase = Input::new()
+        .with_prompt("Enter recovery phrase (12 or 24 words)")
+        .interact_text()
+        .map_err(|e| anyhow::anyhow!("Failed to read recovery phrase: {}", e))?;
+    if phrase.trim().is_empty() {
+        anyhow::bail!("Recovery phrase cannot be empty");
+    }
+    Ok(phrase)
+}
+
 fn create(
     name: String,
     fund: bool,
     network_override: Option<String>,
     encrypt: bool,
     strict: bool,
+    use_mnemonic: bool,
+    words: String,
+    account_index: u32,
 ) -> Result<()> {
     let mut cfg = config::load()?;
 
@@ -371,8 +469,22 @@ fn create(
     let steps = if fund { 3 } else { 2 };
     p::header(&format!("Creating wallet '{}'", name));
 
-    p::step(1, steps, "Generating keypairâ€¦");
-    let (public_key, secret_key) = generate_keypair();
+    let (public_key, secret_key) = if use_mnemonic {
+        let word_count = parse_word_count(&words)?;
+        p::step(
+            1,
+            steps,
+            &format!("Generating {}-word recovery phrase…", word_count.as_usize()),
+        );
+        let phrase = mnemonic::generate_phrase(word_count)?;
+        println!();
+        p::warn("Write down this recovery phrase in order. Anyone with it can access your funds.");
+        p::kv_accent("Recovery Phrase", &phrase);
+        mnemonic::keypair_from_phrase(&phrase, "", account_index)?
+    } else {
+        p::step(1, steps, "Generating keypair…");
+        generate_keypair()
+    };
     println!();
     p::kv_accent("Public Key", &public_key);
 
@@ -394,7 +506,7 @@ fn create(
         }
         println!();
         let pwd = crypto::prompt_passphrase("Set a passphrase to encrypt this wallet", strict)?;
-        crypto::encrypt_secret(&pwd, &secret_key)?
+        crypto::encrypt_secret(&pwd, &secret_key, kdf_options(mem, iterations).as_ref())?
     } else {
         secret_key.clone()
     };
@@ -415,6 +527,7 @@ fn create(
         network: network.clone(),
         created_at: Utc::now().to_rfc3339(),
         funded: false,
+        rotation_history: Vec::new(),
     };
     cfg.wallets.push(wallet);
 
@@ -599,6 +712,227 @@ fn remove(name: String) -> Result<()> {
     p::success(&format!("Wallet '{}' removed", name));
     Ok(())
 }
+fn resolve_merge_destination(to: &str, cfg: &config::Config) -> Result<String> {
+    if to.starts_with('G') {
+        config::validate_public_key(to)?;
+        return Ok(to.to_string());
+    }
+
+    config::validate_wallet_name(to)?;
+    cfg.wallets
+        .iter()
+        .find(|w| w.name == to)
+        .map(|w| w.public_key.clone())
+        .ok_or_else(|| anyhow::anyhow!("Destination wallet '{}' not found", to))
+}
+
+fn wallet_secret_key(wallet: &config::WalletEntry) -> Result<String> {
+    let sk = wallet
+        .secret_key
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Wallet '{}' has no secret key stored", wallet.name))?;
+
+    if sk.contains(':') {
+        let pwd = crypto::prompt_password(
+            &format!("Enter password to decrypt wallet '{}'", wallet.name),
+            false,
+        )?;
+        crypto::decrypt_secret(&pwd, sk)
+            .map_err(|_| anyhow::anyhow!("Incorrect password or unable to decrypt."))
+    } else {
+        Ok(sk.clone())
+    }
+}
+
+fn validate_account_mergeable(account: &horizon::AccountResponse) -> Result<()> {
+    for balance in &account.balances {
+        if balance.asset_type == "native" {
+            continue;
+        }
+        let amount: f64 = balance.balance.parse().unwrap_or(0.0);
+        if amount > 0.0 {
+            let label = balance.asset_code.as_deref().unwrap_or(&balance.asset_type);
+            anyhow::bail!(
+                "Cannot merge: account still holds {} {}. Remove trustlines and balances first.",
+                balance.balance,
+                label
+            );
+        }
+    }
+
+    if account.subentry_count > 0 {
+        anyhow::bail!(
+            "Cannot merge: account has {} subentries (trustlines, signers, data, etc.). \
+             Remove them before merging.",
+            account.subentry_count
+        );
+    }
+
+    Ok(())
+}
+
+fn native_xlm_balance(account: &horizon::AccountResponse) -> f64 {
+    account
+        .balances
+        .iter()
+        .find(|b| b.asset_type == "native")
+        .and_then(|b| b.balance.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+fn merge_wallet(
+    from: String,
+    to: String,
+    network_override: Option<String>,
+    skip_confirm: bool,
+    remove_local: bool,
+) -> Result<()> {
+    config::validate_wallet_name(&from)?;
+
+    let cfg = config::load()?;
+    let wallet = cfg.wallets.iter().find(|w| w.name == from).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Wallet '{}' not found in StarForge. Run `starforge wallet list`",
+            from
+        )
+    })?;
+
+    let network = network_override
+        .clone()
+        .unwrap_or_else(|| wallet.network.clone());
+    config::validate_network(&network)?;
+
+    let destination = resolve_merge_destination(&to, &cfg)?;
+
+    if wallet.public_key == destination {
+        anyhow::bail!("Source and destination accounts must be different");
+    }
+
+    p::header("Account Merge");
+    p::warn("This permanently closes the source account on-chain. This cannot be undone.");
+    p::separator();
+    p::kv("Source Wallet", &wallet.name);
+    p::kv("Source Address", &wallet.public_key);
+    p::kv("Destination", &destination);
+    p::kv("Network", &network);
+
+    if network == "mainnet" {
+        p::warn("You are merging on MAINNET. All remaining XLM will move to the destination.");
+    }
+
+    p::separator();
+    println!();
+    p::step(1, 3, "Fetching source account…");
+    let source_account = horizon::fetch_account(&wallet.public_key, &network).map_err(|e| {
+        anyhow::anyhow!(
+            "Source account not found on {}: {}\nIt may already be merged or never funded.",
+            network,
+            e
+        )
+    })?;
+
+    validate_account_mergeable(&source_account)?;
+    let xlm_balance = native_xlm_balance(&source_account);
+    p::kv(
+        "XLM to Transfer",
+        &format!("{:.7} XLM (minus fee)", xlm_balance),
+    );
+
+    if xlm_balance <= 0.00001 {
+        anyhow::bail!("Source account has insufficient XLM to cover transaction fees");
+    }
+
+    p::step(2, 3, "Validating destination account…");
+    horizon::fetch_account(&destination, &network).map_err(|_| {
+        anyhow::anyhow!(
+            "Destination account does not exist on {}. \
+             The destination must be funded before it can receive a merge.",
+            network
+        )
+    })?;
+    p::kv("Destination", "✓ Account exists");
+
+    p::step(3, 3, "Building account merge transaction…");
+    let tx_result = horizon::build_and_simulate_account_merge(
+        &wallet.public_key,
+        &destination,
+        &source_account.sequence,
+        &network,
+    )?;
+
+    p::kv(
+        "Estimated Fee",
+        &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0),
+    );
+
+    if !skip_confirm {
+        println!();
+        p::warn(&format!(
+            "Account '{}' ({}) will be closed and remaining XLM sent to {}.",
+            wallet.name, wallet.public_key, destination
+        ));
+        print!(
+            "  Type the source wallet name ({}) to confirm merge: ",
+            wallet.name
+        );
+        use std::io::BufRead;
+        let line = std::io::stdin()
+            .lock()
+            .lines()
+            .next()
+            .unwrap_or(Ok(String::new()))?;
+        if line.trim() != wallet.name {
+            p::info("Account merge cancelled.");
+            return Ok(());
+        }
+    }
+
+    println!();
+    let secret_key = wallet_secret_key(wallet)?;
+    p::info("Submitting account merge…");
+    let submit_result =
+        horizon::submit_payment_transaction(&tx_result.transaction_xdr, &secret_key, &network)?;
+
+    println!();
+    p::separator();
+    println!(
+        "  {} {}",
+        "✓".green().bold(),
+        "Account merge submitted successfully!".bright_white()
+    );
+    println!();
+    p::kv_accent("Transaction Hash", &submit_result.hash);
+
+    let explorer_base = if network == "mainnet" {
+        "https://stellar.expert/explorer/public/tx"
+    } else {
+        "https://stellar.expert/explorer/testnet/tx"
+    };
+    p::kv(
+        "Stellar Expert",
+        &format!("{}/{}", explorer_base, submit_result.hash),
+    );
+    p::separator();
+
+    if remove_local {
+        let mut cfg = config::load()?;
+        let before = cfg.wallets.len();
+        cfg.wallets.retain(|w| w.name != from);
+        if cfg.wallets.len() < before {
+            config::save(&cfg)?;
+            p::success(&format!("Removed wallet '{}' from local storage", from));
+        }
+    } else {
+        p::info(&format!(
+            "Local wallet '{}' is still saved. Remove it with: {}",
+            from,
+            format!("starforge wallet remove {}", from).cyan()
+        ));
+    }
+
+    Ok(())
+}
+
 fn rename(old_name: String, new_name: String) -> Result<()> {
     config::validate_wallet_name(&old_name)?;
     config::validate_wallet_name(&new_name)?;
@@ -630,6 +964,8 @@ fn rotate_wallet(
     fund: bool,
     network_override: Option<String>,
     encrypt: bool,
+    mem: Option<u32>,
+    iterations: Option<u32>,
 ) -> Result<()> {
     config::validate_wallet_name(&name)?;
     let mut cfg = config::load()?;
@@ -657,7 +993,7 @@ fn rotate_wallet(
             "Set a secure passphrase to encrypt the rotated wallet",
             true,
         )?;
-        crypto::encrypt_secret(&pwd, &secret_key)?
+        crypto::encrypt_secret(&pwd, &secret_key, kdf_options(mem, iterations).as_ref())?
     } else {
         secret_key.clone()
     };
@@ -747,6 +1083,76 @@ fn export_wallet(name: String, output: PathBuf) -> Result<()> {
     p::success(&format!("Wallet '{}' exported", name));
     p::kv("Backup file", &output.display().to_string());
     p::info("Secrets are only stored in the backup file; they are not printed to stdout.");
+    Ok(())
+}
+
+fn import_wallet(
+    name: Option<String>,
+    file: Option<PathBuf>,
+    from_mnemonic: bool,
+    account_index: u32,
+    network_override: Option<String>,
+    encrypt: bool,
+) -> Result<()> {
+    if from_mnemonic {
+        let name = name.ok_or_else(|| {
+            anyhow::anyhow!("Wallet name is required for mnemonic import (e.g. starforge wallet import alice --mnemonic)")
+        })?;
+        return import_from_mnemonic(name, account_index, network_override, encrypt);
+    }
+
+    let file = file.ok_or_else(|| {
+        anyhow::anyhow!("Provide --file <backup.json> or --mnemonic to import a wallet")
+    })?;
+    import_wallets(file)
+}
+
+fn import_from_mnemonic(
+    name: String,
+    account_index: u32,
+    network_override: Option<String>,
+    encrypt: bool,
+) -> Result<()> {
+    let mut cfg = config::load()?;
+    config::validate_wallet_name(&name)?;
+
+    if cfg.wallets.iter().any(|w| w.name == name) {
+        anyhow::bail!("A wallet named '{}' already exists.", name);
+    }
+
+    let network = network_override.unwrap_or_else(|| cfg.network.clone());
+    p::header(&format!("Importing wallet '{}' from recovery phrase", name));
+
+    let phrase = prompt_recovery_phrase()?;
+    let (public_key, secret_key) = mnemonic::keypair_from_phrase(&phrase, "", account_index)?;
+
+    println!();
+    p::kv_accent("Public Key", &public_key);
+
+    let secret_to_store = if encrypt {
+        println!();
+        let pwd = crypto::prompt_passphrase("Set a passphrase to encrypt this wallet", false)?;
+        crypto::encrypt_secret(&pwd, &secret_key)?
+    } else {
+        secret_key
+    };
+
+    cfg.wallets.push(config::WalletEntry {
+        name: name.clone(),
+        public_key,
+        secret_key: Some(secret_to_store),
+        network: network.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        funded: false,
+        rotation_history: Vec::new(),
+    });
+
+    config::save(&cfg)?;
+    p::success(&format!("Wallet '{}' imported from recovery phrase", name));
+    p::info(&format!(
+        "View it with: {}",
+        format!("starforge wallet show {}", name).cyan()
+    ));
     Ok(())
 }
 

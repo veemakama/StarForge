@@ -185,10 +185,10 @@ fn handle_invoke(args: InvokeArgs) -> Result<()> {
         p::warn("You are invoking on MAINNET. This may cost real XLM if submitted.");
     }
 
-    // Load wallet if needed for submission
-    let wallet = if args.submit {
+    // Load and optionally decrypt wallet for submission
+    let submit_wallet: Option<crate::utils::config::WalletEntry> = if args.submit {
         let cfg = config::load()?;
-        let wallet = if let Some(ref wallet_name) = args.wallet {
+        let mut w = if let Some(ref wallet_name) = args.wallet {
             cfg.wallets
                 .iter()
                 .find(|w| &w.name == wallet_name)
@@ -198,41 +198,49 @@ fn handle_invoke(args: InvokeArgs) -> Result<()> {
                         wallet_name
                     )
                 })?
+                .clone()
         } else if !cfg.wallets.is_empty() {
             p::info(&format!(
                 "No --wallet specified. Using: {}",
                 cfg.wallets[0].name.cyan()
             ));
-            &cfg.wallets[0]
+            cfg.wallets[0].clone()
         } else {
             anyhow::bail!(
                 "No wallets found for submission. Create one first:\n  starforge wallet create deployer --fund"
             );
         };
-        p::kv("Wallet", &wallet.name);
-        Some(wallet.clone())
+        p::kv("Wallet", &w.name);
+        if let Some(sk) = &w.secret_key.clone() {
+            if sk.contains(':') {
+                let pwd = crypto::prompt_password(
+                    &format!("Enter password to decrypt wallet '{}'", w.name),
+                    false,
+                )?;
+                w.secret_key = Some(crypto::decrypt_secret(&pwd, sk)?);
+            }
+        }
+        Some(w)
     } else {
         None
     };
 
     p::separator();
 
-    // Step 1: Simulate the transaction
+    // Step 1 (+ optional Step 2): delegate to shared invoke_contract()
     println!();
-    p::step(
-        1,
-        if args.submit { 2 } else { 1 },
-        "Simulating contract invocation…",
-    );
+    p::step(1, if args.submit { 2 } else { 1 }, "Simulating contract invocation…");
 
-    let simulation_result = soroban::simulate_transaction(
+    let outcome = soroban::invoke_contract(
         &args.contract_id,
         &args.function,
         &args.args,
         &arg_types,
         &args.network,
+        submit_wallet.as_ref(),
     )?;
 
+    let simulation_result = outcome.simulation;
     p::kv_accent("Simulation", "✓ Success");
     p::kv("Return Value", &simulation_result.return_value);
     p::kv("Fee (stroops)", &simulation_result.fee.to_string());
@@ -251,38 +259,13 @@ fn handle_invoke(args: InvokeArgs) -> Result<()> {
         }
     }
 
-    // Step 2: Submit if requested
-    if args.submit {
-        if let Some(mut wallet) = wallet {
-            println!();
-
-            if let Some(sk) = &wallet.secret_key {
-                if sk.contains(':') {
-                    let pwd = crypto::prompt_password(
-                        &format!("Enter password to decrypt wallet '{}'", wallet.name),
-                        false,
-                    )?;
-                    let plain_sk = crypto::decrypt_secret(&pwd, sk)?;
-                    wallet.secret_key = Some(plain_sk);
-                }
-            }
-
-            p::step(2, 2, "Submitting transaction…");
-
-            let tx_result = soroban::submit_transaction(
-                &args.contract_id,
-                &args.function,
-                &args.args,
-                &arg_types,
-                &args.network,
-                &wallet,
-            )?;
-
-            p::kv_accent("Transaction", "✓ Submitted");
-            p::kv("TX Hash", &tx_result.hash);
-            p::kv("Return Value", &tx_result.return_value);
-        }
-    } else {
+    if let Some(tx_result) = outcome.transaction {
+        println!();
+        p::step(2, 2, "Submitting transaction…");
+        p::kv_accent("Transaction", "✓ Submitted");
+        p::kv("TX Hash", &tx_result.hash);
+        p::kv("Return Value", &tx_result.return_value);
+    } else if !args.submit {
         println!();
         p::info("Simulation complete. Add --submit to execute the transaction.");
     }
