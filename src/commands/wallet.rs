@@ -1,4 +1,4 @@
-use crate::utils::{config, crypto, hardware_wallet, horizon, multisig, print as p};
+use crate::utils::{config, crypto, hardware_wallet, horizon, mnemonic, multisig, print as p};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Subcommand;
@@ -62,6 +62,15 @@ pub enum WalletCommands {
         /// (requires --encrypt)
         #[arg(long, default_value = "false", requires = "encrypt")]
         strict: bool,
+        /// Generate a BIP39 recovery phrase instead of a random key
+        #[arg(long, default_value = "false")]
+        mnemonic: bool,
+        /// Mnemonic length: 12 or 24 words (requires --mnemonic)
+        #[arg(long, default_value = "24", requires = "mnemonic", value_parser = ["12", "24"])]
+        words: String,
+        /// Account index for SEP-0005 path m/44'/148'/index' (requires --mnemonic)
+        #[arg(long, default_value = "0", requires = "mnemonic")]
+        account_index: u32,
     },
     /// List all saved wallets
     List,
@@ -107,11 +116,25 @@ pub enum WalletCommands {
         #[arg(long)]
         output: PathBuf,
     },
-    /// Import wallets from a JSON backup file
+    /// Import a wallet from a JSON backup or BIP39 recovery phrase
     Import {
+        /// Wallet name (required with --mnemonic)
+        name: Option<String>,
         /// Path to backup JSON file
-        #[arg(long)]
-        file: PathBuf,
+        #[arg(long, group = "source")]
+        file: Option<PathBuf>,
+        /// Import from a BIP39 recovery phrase (prompted interactively)
+        #[arg(long, group = "source")]
+        mnemonic: bool,
+        /// Account index for SEP-0005 path m/44'/148'/index'
+        #[arg(long, default_value = "0")]
+        account_index: u32,
+        /// Network to associate with this wallet
+        #[arg(long, value_parser = ["testnet", "mainnet"])]
+        network: Option<String>,
+        /// Encrypt the imported secret key with a passphrase at rest
+        #[arg(long, default_value = "false")]
+        encrypt: bool,
     },
 
     /// Connect to a hardware wallet (Ledger/Trezor) and show device info
@@ -215,7 +238,19 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             network,
             encrypt,
             strict,
-        } => create(name, fund, network, encrypt, strict),
+            mnemonic: use_mnemonic,
+            words,
+            account_index,
+        } => create(
+            name,
+            fund,
+            network,
+            encrypt,
+            strict,
+            use_mnemonic,
+            words,
+            account_index,
+        ),
         WalletCommands::List => list(),
         WalletCommands::Show { name, reveal } => show(name, reveal),
         WalletCommands::Fund { name } => fund_wallet(name),
@@ -228,7 +263,14 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             encrypt,
         } => rotate_wallet(name, fund, network, encrypt),
         WalletCommands::Export { name, output } => export_wallet(name, output),
-        WalletCommands::Import { file } => import_wallets(file),
+        WalletCommands::Import {
+            name,
+            file,
+            mnemonic: from_mnemonic,
+            account_index,
+            network,
+            encrypt,
+        } => import_wallet(name, file, from_mnemonic, account_index, network, encrypt),
         WalletCommands::Connect { device } => connect_hardware(device),
         WalletCommands::HwAddress { device, path } => hw_address(device, &path),
         WalletCommands::HwStatus { device } => hw_status(device),
@@ -351,12 +393,35 @@ fn generate_keypair() -> (String, String) {
     (public_key, secret_key)
 }
 
+fn parse_word_count(words: &str) -> Result<mnemonic::WordCount> {
+    match words {
+        "12" => Ok(mnemonic::WordCount::Words12),
+        "24" => Ok(mnemonic::WordCount::Words24),
+        _ => anyhow::bail!("--words must be 12 or 24"),
+    }
+}
+
+fn prompt_recovery_phrase() -> Result<String> {
+    use dialoguer::Input;
+    let phrase = Input::new()
+        .with_prompt("Enter recovery phrase (12 or 24 words)")
+        .interact_text()
+        .map_err(|e| anyhow::anyhow!("Failed to read recovery phrase: {}", e))?;
+    if phrase.trim().is_empty() {
+        anyhow::bail!("Recovery phrase cannot be empty");
+    }
+    Ok(phrase)
+}
+
 fn create(
     name: String,
     fund: bool,
     network_override: Option<String>,
     encrypt: bool,
     strict: bool,
+    use_mnemonic: bool,
+    words: String,
+    account_index: u32,
 ) -> Result<()> {
     let mut cfg = config::load()?;
 
@@ -371,8 +436,22 @@ fn create(
     let steps = if fund { 3 } else { 2 };
     p::header(&format!("Creating wallet '{}'", name));
 
-    p::step(1, steps, "Generating keypairâ€¦");
-    let (public_key, secret_key) = generate_keypair();
+    let (public_key, secret_key) = if use_mnemonic {
+        let word_count = parse_word_count(&words)?;
+        p::step(
+            1,
+            steps,
+            &format!("Generating {}-word recovery phrase…", word_count.as_usize()),
+        );
+        let phrase = mnemonic::generate_phrase(word_count)?;
+        println!();
+        p::warn("Write down this recovery phrase in order. Anyone with it can access your funds.");
+        p::kv_accent("Recovery Phrase", &phrase);
+        mnemonic::keypair_from_phrase(&phrase, "", account_index)?
+    } else {
+        p::step(1, steps, "Generating keypair…");
+        generate_keypair()
+    };
     println!();
     p::kv_accent("Public Key", &public_key);
 
@@ -415,6 +494,7 @@ fn create(
         network: network.clone(),
         created_at: Utc::now().to_rfc3339(),
         funded: false,
+        rotation_history: Vec::new(),
     };
     cfg.wallets.push(wallet);
 
@@ -747,6 +827,76 @@ fn export_wallet(name: String, output: PathBuf) -> Result<()> {
     p::success(&format!("Wallet '{}' exported", name));
     p::kv("Backup file", &output.display().to_string());
     p::info("Secrets are only stored in the backup file; they are not printed to stdout.");
+    Ok(())
+}
+
+fn import_wallet(
+    name: Option<String>,
+    file: Option<PathBuf>,
+    from_mnemonic: bool,
+    account_index: u32,
+    network_override: Option<String>,
+    encrypt: bool,
+) -> Result<()> {
+    if from_mnemonic {
+        let name = name.ok_or_else(|| {
+            anyhow::anyhow!("Wallet name is required for mnemonic import (e.g. starforge wallet import alice --mnemonic)")
+        })?;
+        return import_from_mnemonic(name, account_index, network_override, encrypt);
+    }
+
+    let file = file.ok_or_else(|| {
+        anyhow::anyhow!("Provide --file <backup.json> or --mnemonic to import a wallet")
+    })?;
+    import_wallets(file)
+}
+
+fn import_from_mnemonic(
+    name: String,
+    account_index: u32,
+    network_override: Option<String>,
+    encrypt: bool,
+) -> Result<()> {
+    let mut cfg = config::load()?;
+    config::validate_wallet_name(&name)?;
+
+    if cfg.wallets.iter().any(|w| w.name == name) {
+        anyhow::bail!("A wallet named '{}' already exists.", name);
+    }
+
+    let network = network_override.unwrap_or_else(|| cfg.network.clone());
+    p::header(&format!("Importing wallet '{}' from recovery phrase", name));
+
+    let phrase = prompt_recovery_phrase()?;
+    let (public_key, secret_key) = mnemonic::keypair_from_phrase(&phrase, "", account_index)?;
+
+    println!();
+    p::kv_accent("Public Key", &public_key);
+
+    let secret_to_store = if encrypt {
+        println!();
+        let pwd = crypto::prompt_passphrase("Set a passphrase to encrypt this wallet", false)?;
+        crypto::encrypt_secret(&pwd, &secret_key)?
+    } else {
+        secret_key
+    };
+
+    cfg.wallets.push(config::WalletEntry {
+        name: name.clone(),
+        public_key,
+        secret_key: Some(secret_to_store),
+        network: network.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        funded: false,
+        rotation_history: Vec::new(),
+    });
+
+    config::save(&cfg)?;
+    p::success(&format!("Wallet '{}' imported from recovery phrase", name));
+    p::info(&format!(
+        "View it with: {}",
+        format!("starforge wallet show {}", name).cyan()
+    ));
     Ok(())
 }
 
