@@ -89,6 +89,9 @@ Built-in example templates are provided under `templates/examples/`:
 
 - `simple-counter`: A basic smart contract demonstrating storage usage by incrementing, getting, and resetting a counter.
 - `token-allowlist`: A smart contract for managing an allowlist of approved addresses, controlled by an administrator.
+- `escrow`: A DeFi token escrow with buyer, seller, and arbiter roles for marketplaces, freelance payments, and OTC trades.
+- `dao-governance`: A minimal DAO governance contract with member proposals and one-member-one-vote tallying.
+- `multisig-vault`: A threshold (M-of-N) multi-signature vault for shared-custody token transfers and treasuries.
 
 ## Template Placeholders
 
