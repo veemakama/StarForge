@@ -304,13 +304,10 @@ pub fn handle(cmd: WalletCommands) -> Result<()> {
             fund,
             network,
             encrypt,
-        } => rotate_wallet(name, fund, network, encrypt),
-        WalletCommands::Export { name, all, output } => export_wallet(name, all, output),
-        WalletCommands::Import { file } => import_wallets(file),
             mem,
             iterations,
         } => rotate_wallet(name, fund, network, encrypt, mem, iterations),
-        WalletCommands::Export { name, output } => export_wallet(name, output),
+        WalletCommands::Export { name, all, output } => export_wallet(name, all, output),
         WalletCommands::Import {
             name,
             file,
@@ -1095,7 +1092,7 @@ fn export_wallet(name_opt: Option<String>, all: bool, output: PathBuf) -> Result
     let json = serde_json::to_string_pretty(&backup)
         .with_context(|| "Failed to serialize wallet backup")?;
     let passphrase = crypto::prompt_passphrase("Enter passphrase to encrypt backup", false)?;
-    let encrypted = crypto::encrypt_secret(&passphrase, &json)?;
+    let encrypted = crypto::encrypt_secret(&passphrase, &json, None)?;
     fs::write(&output, encrypted)
         .with_context(|| format!("Failed to write {}", output.display()))?;
 

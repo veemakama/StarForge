@@ -77,3 +77,95 @@ fn deploy_help_documents_flags() {
     assert!(stdout.contains("--simulate"));
     assert!(stdout.contains("--execute"));
 }
+
+#[test]
+fn network_add_custom_succeeds() {
+    let output = starforge()
+        .args([
+            "network",
+            "add",
+            "my-smoke-test-net",
+            "--horizon-url",
+            "https://example.com/horizon",
+            "--soroban-rpc-url",
+            "https://example.com/rpc",
+        ])
+        .output()
+        .expect("spawn network add");
+    assert_success(&output, "starforge network add");
+
+    // Verify it appears in the list
+    let list_output = starforge()
+        .args(["network", "show"])
+        .output()
+        .expect("spawn network show");
+    assert_success(&list_output, "starforge network show");
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        stdout.to_lowercase().contains("my-smoke-test-net"),
+        "expected 'my-smoke-test-net' in network show output"
+    );
+}
+
+#[test]
+fn network_add_rejects_empty_horizon_url() {
+    let output = starforge()
+        .args(["network", "add", "bad-net", "--horizon-url", ""])
+        .output()
+        .expect("spawn network add with empty url");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for empty horizon URL"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be empty") || stderr.contains("must start with"),
+        "expected URL validation message in stderr, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn network_switch_to_mainnet_succeeds() {
+    let output = starforge()
+        .args(["network", "switch", "mainnet"])
+        .output()
+        .expect("spawn network switch mainnet");
+    assert_success(&output, "starforge network switch mainnet");
+}
+
+#[test]
+fn network_switch_unknown_network_fails() {
+    let output = starforge()
+        .args(["network", "switch", "does-not-exist-xyz"])
+        .output()
+        .expect("spawn network switch unknown");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for unknown network"
+    );
+}
+
+#[test]
+fn network_add_reserved_name_fails() {
+    let output = starforge()
+        .args([
+            "network",
+            "add",
+            "testnet",
+            "--horizon-url",
+            "https://example.com",
+        ])
+        .output()
+        .expect("spawn network add testnet");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when overwriting reserved network name"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("reserved"),
+        "expected 'reserved' in stderr, got: {}",
+        stderr
+    );
+}

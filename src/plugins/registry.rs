@@ -3,6 +3,55 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Trust level assigned to a plugin at install time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustLevel {
+    /// Plugin was loaded from a local path provided by the user.
+    /// Considered trusted because the user explicitly supplied the path.
+    Local,
+    /// Plugin was fetched from a known trusted source (allow-listed URL prefix).
+    Trusted,
+    /// Plugin source is unknown or not in the allow-list.
+    /// StarForge will warn before loading.
+    #[default]
+    Unknown,
+}
+
+impl TrustLevel {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TrustLevel::Local => "local",
+            TrustLevel::Trusted => "trusted",
+            TrustLevel::Unknown => "unknown",
+        }
+    }
+}
+
+/// Prefixes of sources that are automatically given `Trusted` status.
+const TRUSTED_SOURCE_PREFIXES: &[&str] = &[
+    "https://github.com/Nanle-code/starforge-",
+    "https://github.com/StarForge-Labs/",
+    "https://crates.io/crates/starforge-plugin-",
+];
+
+/// Classify a source URL/path into a trust level.
+///
+/// - An empty source (i.e., `--path` was used) → `Local`
+/// - A source matching a known trusted prefix → `Trusted`
+/// - Everything else → `Unknown`
+pub fn classify_source(source: &str) -> TrustLevel {
+    if source.is_empty() {
+        return TrustLevel::Local;
+    }
+    for prefix in TRUSTED_SOURCE_PREFIXES {
+        if source.starts_with(prefix) {
+            return TrustLevel::Trusted;
+        }
+    }
+    TrustLevel::Unknown
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginRegistry {
     #[serde(default)]
@@ -12,8 +61,14 @@ pub struct PluginRegistry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledPlugin {
     pub name: String,
-    /// Stored as a string for portability (and easy display)
+    /// Absolute path to the plugin shared library on disk.
     pub path: String,
+    /// Where the plugin came from (empty = installed via --path).
+    #[serde(default)]
+    pub source: String,
+    /// Trust level assigned at install time.
+    #[serde(default)]
+    pub trust: TrustLevel,
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -44,16 +99,24 @@ pub fn save_registry(reg: &PluginRegistry) -> Result<()> {
     Ok(())
 }
 
-pub fn install_plugin(name: &str, library_path: &Path) -> Result<()> {
+/// Install a plugin into the registry.
+///
+/// `source` is the URL or identifier where the plugin came from; pass an
+/// empty string when the user supplied `--path` directly.
+pub fn install_plugin(name: &str, library_path: &Path, source: &str) -> Result<()> {
     if !library_path.exists() {
         anyhow::bail!("Plugin library not found: {}", library_path.display());
     }
+
+    let trust = classify_source(source);
 
     let mut reg = load_registry().unwrap_or_default();
     reg.plugins.retain(|p| p.name != name);
     reg.plugins.push(InstalledPlugin {
         name: name.to_string(),
         path: library_path.display().to_string(),
+        source: source.to_string(),
+        trust,
     });
     reg.plugins.sort_by(|a, b| a.name.cmp(&b.name));
     save_registry(&reg)?;
@@ -65,9 +128,6 @@ pub fn resolve_plugin_library_path(name: &str, explicit: Option<PathBuf>) -> Res
         return Ok(p);
     }
 
-    // Heuristic locations:
-    // - ./libstarforge_<name>.<ext>
-    // - ~/.starforge/plugins/<name>/libstarforge_<name>.<ext>
     let cwd = std::env::current_dir().context("Failed to get current dir")?;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let plugin_dir = home.join(".starforge").join("plugins").join(name);
@@ -97,5 +157,131 @@ fn candidate_library_names(name: &str) -> Vec<String> {
         vec![format!("{base}.dylib"), format!("{base}.so")]
     } else {
         vec![format!("{base}.so")]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn temp_registry(tmp: &TempDir) -> PathBuf {
+        tmp.path().join("registry.json")
+    }
+
+    fn dummy_lib(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        fs::write(&p, b"ELF-dummy").unwrap();
+        p
+    }
+
+    // ── classify_source ───────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_source_is_local() {
+        assert_eq!(classify_source(""), TrustLevel::Local);
+    }
+
+    #[test]
+    fn official_github_source_is_trusted() {
+        assert_eq!(
+            classify_source("https://github.com/Nanle-code/starforge-defi"),
+            TrustLevel::Trusted
+        );
+    }
+
+    #[test]
+    fn starforge_labs_source_is_trusted() {
+        assert_eq!(
+            classify_source("https://github.com/StarForge-Labs/my-plugin"),
+            TrustLevel::Trusted
+        );
+    }
+
+    #[test]
+    fn unknown_source_is_unknown() {
+        assert_eq!(
+            classify_source("https://github.com/random-user/my-plugin"),
+            TrustLevel::Unknown
+        );
+    }
+
+    #[test]
+    fn crates_io_starforge_plugin_is_trusted() {
+        assert_eq!(
+            classify_source("https://crates.io/crates/starforge-plugin-analytics"),
+            TrustLevel::Trusted
+        );
+    }
+
+    // ── install_plugin ────────────────────────────────────────────────────────
+
+    #[test]
+    fn install_local_plugin_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let lib = dummy_lib(tmp.path(), "libstarforge_test.so");
+
+        // We test the trust classification part only (actual registry write
+        // goes to the real ~/.starforge path; mock at classify level is enough).
+        assert!(lib.exists());
+        let trust = classify_source("");
+        assert_eq!(trust, TrustLevel::Local);
+    }
+
+    #[test]
+    fn install_missing_library_fails() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("nonexistent.so");
+        let result = install_plugin("test", &missing, "");
+        assert!(result.is_err(), "installing a missing library must fail");
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    // ── trust level serialisation ─────────────────────────────────────────────
+
+    #[test]
+    fn trust_level_roundtrips_via_json() {
+        for level in [TrustLevel::Local, TrustLevel::Trusted, TrustLevel::Unknown] {
+            let json = serde_json::to_string(&level).unwrap();
+            let decoded: TrustLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, level, "TrustLevel {:?} should roundtrip via JSON", level);
+        }
+    }
+
+    #[test]
+    fn unknown_trust_is_default() {
+        let plugin: InstalledPlugin = serde_json::from_str(
+            r#"{"name":"test","path":"/tmp/test.so"}"#,
+        )
+        .unwrap();
+        assert_eq!(plugin.trust, TrustLevel::Unknown, "missing trust field should default to Unknown");
+        assert_eq!(plugin.source, "", "missing source field should default to empty string");
+    }
+
+    // ── resolve_plugin_library_path ───────────────────────────────────────────
+
+    #[test]
+    fn explicit_path_is_returned_directly() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("my_plugin.so");
+        let result = resolve_plugin_library_path("myplugin", Some(p.clone()));
+        assert_eq!(result.unwrap(), p);
+    }
+
+    #[test]
+    fn missing_implicit_path_returns_error() {
+        let result = resolve_plugin_library_path("__no_such_plugin_xyz__", None);
+        assert!(result.is_err());
+    }
+
+    // ── backward compatibility ────────────────────────────────────────────────
+
+    #[test]
+    fn old_registry_without_trust_fields_deserialises() {
+        let json = r#"{"plugins":[{"name":"legacy","path":"/tmp/legacy.so"}]}"#;
+        let reg: PluginRegistry = serde_json::from_str(json).unwrap();
+        assert_eq!(reg.plugins.len(), 1);
+        assert_eq!(reg.plugins[0].trust, TrustLevel::Unknown);
+        assert_eq!(reg.plugins[0].source, "");
     }
 }

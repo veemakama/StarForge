@@ -21,24 +21,28 @@ jobs:
             target: x86_64-unknown-linux-gnu
             archive_name: starforge-linux-x86_64
             archive_ext: tar.gz
+            binary_name: starforge
 
           # macOS ARM64 — native on macos-latest (M1 runner)
           - os: macos-latest
             target: aarch64-apple-darwin
             archive_name: starforge-macos-aarch64
             archive_ext: tar.gz
+            binary_name: starforge
 
           # Windows x86_64 — native
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive_name: starforge-windows-x86_64
             archive_ext: zip
+            binary_name: starforge.exe
 
           # Linux ARM64 — cross-compiled using `cross`
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive_name: starforge-linux-aarch64
             archive_ext: tar.gz
+            binary_name: starforge
 
     steps:
       - uses: actions/checkout@v4
@@ -71,21 +75,115 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/release/starforge dist/starforge
-          tar -czf dist/starforge-linux-x86_64.tar.gz -C dist starforge
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/starforge
+          else
+            cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/starforge
+          fi
+          tar -czf "dist/${{ matrix.archive_name }}.tar.gz" -C dist starforge
+          rm dist/starforge
+
+      # Windows produces .zip
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
           cd dist
-          sha256sum starforge-linux-x86_64.tar.gz > checksums.txt
+          7z a "${{ matrix.archive_name }}.zip" "${{ matrix.binary_name }}"
+          rm "${{ matrix.binary_name }}"
+
+      # Generate checksums for all archives
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "${{ matrix.archive_name }}.zip" SHA256 | grep -v "SHA256 hash" | grep -v "^$" > checksums.txt
+          else
+            sha256sum "${{ matrix.archive_name }}.tar.gz" >> checksums.txt
+          fi
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: starforge-linux-x86_64
+          name: ${{ matrix.archive_name }}
           path: |
-            dist/starforge-linux-x86_64.tar.gz
+            dist/${{ matrix.archive_name }}.*
             dist/checksums.txt
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-files/ \;
+          find release-artifacts -type f -name "checksums.txt" -exec cat {} >> release-files/SHA256SUMS.txt \;
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/starforge-linux-x86_64.tar.gz
-            dist/checksums.txt
+            release-files/*
+
+  homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: starforge-linux-x86_64
+          path: homebrew-build
+
+      - name: Generate Homebrew formula
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARBALL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/starforge-linux-x86_64.tar.gz"
+          SHA256=$(cd homebrew-build && sha256sum starforge-linux-x86_64.tar.gz | cut -d' ' -f1)
+
+          cat > homebrew-formula.rb << EOF
+          class Starforge < Formula
+            desc "Deploy Soroban smart contracts with enhanced CLI"
+            homepage "https://github.com/${{ github.repository }}"
+            url "${TARBALL}"
+            sha256 "${SHA256}"
+            version "${VERSION}"
+
+            def install
+              bin.install "starforge"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/starforge --version")
+            end
+          end
+          EOF
+
+          cat homebrew-formula.rb
+
+      - name: Create PR to homebrew-core (optional)
+        run: |
+          echo "Homebrew formula generated. Manual PR creation or automation can be set up."
 

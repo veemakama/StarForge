@@ -16,6 +16,7 @@ pub mod sandbox;
 pub mod soroban;
 pub mod stream;
 pub mod telemetry;
+pub mod template;
 pub mod templates;
 pub mod test_runner;
 pub mod tutorial_engine;

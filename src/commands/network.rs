@@ -24,6 +24,9 @@ pub enum NetworkCommands {
         /// Optional network faucet / Friendbot URL
         #[arg(long)]
         friendbot_url: Option<String>,
+        /// Optional network passphrase for transaction signing (defaults to testnet passphrase)
+        #[arg(long)]
+        passphrase: Option<String>,
     },
     /// Test connectivity to a network
     Test {
@@ -37,14 +40,13 @@ pub fn handle(cmd: NetworkCommands) -> Result<()> {
     match cmd {
         NetworkCommands::Show => show(),
         NetworkCommands::Switch { network } => switch(network),
-        NetworkCommands::Add { name, horizon_url, soroban_rpc_url, friendbot_url } =>
-            add_network(name, horizon_url, soroban_rpc_url, friendbot_url),
         NetworkCommands::Add {
             name,
             horizon_url,
             soroban_rpc_url,
             friendbot_url,
-        } => add_network(name, horizon_url, soroban_rpc_url, friendbot_url),
+            passphrase,
+        } => add_network(name, horizon_url, soroban_rpc_url, friendbot_url, passphrase),
         NetworkCommands::Test { network } => test_network(network),
     }
 }
@@ -75,13 +77,8 @@ fn show() -> Result<()> {
 fn switch(target: String) -> Result<()> {
     let mut cfg = config::load()?;
 
-    // Validate network exists
-    if !cfg.networks.contains_key(&target) {
-        anyhow::bail!(
-            "Network '{}' not found. Use 'starforge network add' to create it.",
-            target
-        );
-    }
+    // Validate network exists (accepts built-ins + custom networks)
+    config::validate_network_exists(&cfg, &target)?;
 
     // Check if already on the target network
     if cfg.network == target {
@@ -107,29 +104,39 @@ fn switch(target: String) -> Result<()> {
     Ok(())
 }
 
+fn validate_url(label: &str, url: &str) -> Result<()> {
+    if url.is_empty() {
+        anyhow::bail!("{} URL cannot be empty", label);
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        anyhow::bail!("{} URL must start with http:// or https://", label);
+    }
+    Ok(())
+}
+
 fn add_network(
     name: String,
     horizon_url: String,
     soroban_rpc_url: Option<String>,
     friendbot_url: Option<String>,
+    passphrase: Option<String>,
 ) -> Result<()> {
     let mut cfg = config::load()?;
 
-    if !horizon_url.starts_with("http://") && !horizon_url.starts_with("https://") {
-        anyhow::bail!("Horizon URL must start with http:// or https://");
-    }
+    validate_url("Horizon", &horizon_url)?;
 
     if let Some(ref url) = soroban_rpc_url {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            anyhow::bail!("Soroban RPC URL must start with http:// or https://");
-        }
+        validate_url("Soroban RPC", url)?;
     }
 
     if let Some(ref url) = friendbot_url {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            anyhow::bail!("Friendbot URL must start with http:// or https://");
-        }
+        validate_url("Friendbot", url)?;
     }
+
+    // Normalize trailing slashes so URL construction is consistent downstream
+    let horizon_url = horizon_url.trim_end_matches('/').to_string();
+    let soroban_rpc_url = soroban_rpc_url.map(|u| u.trim_end_matches('/').to_string());
+    let friendbot_url = friendbot_url.map(|u| u.trim_end_matches('/').to_string());
 
     config::add_custom_network(
         &mut cfg,
@@ -137,6 +144,7 @@ fn add_network(
         horizon_url.clone(),
         soroban_rpc_url.clone(),
         friendbot_url.clone(),
+        passphrase,
     )?;
     config::save(&cfg)?;
 
@@ -161,7 +169,7 @@ fn test_network(network_name: Option<String>) -> Result<()> {
     p::info(&format!("Horizon: {}", net_cfg.horizon_url));
 
     // Test Horizon endpoint
-    match ureq::get(&format!("{}health", net_cfg.horizon_url)).call() {
+    match ureq::get(&format!("{}/health", net_cfg.horizon_url)).call() {
         Ok(_) => {
             p::success("✓ Horizon endpoint is reachable");
         }

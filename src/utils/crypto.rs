@@ -87,6 +87,7 @@ impl PassphraseStrength {
 }
 
 /// Result of a passphrase strength evaluation.
+#[derive(Debug)]
 pub struct StrengthReport {
     pub strength: PassphraseStrength,
     /// First suggestion from zxcvbn, if any.

@@ -81,7 +81,7 @@ fn search_templates(query: &str) -> Result<()> {
     for (i, entry) in results.iter().enumerate() {
         println!("  {:>2}. {}@{}", i + 1, entry.name, entry.version);
         p::kv("Description", &entry.description);
-        p::kv("Source", &entry.source);
+        p::kv("Source", &entry.source.to_string());
         if !entry.tags.is_empty() {
             p::kv("Tags", &entry.tags.join(", "));
         }
@@ -191,11 +191,17 @@ fn scaffold_contract(
 ) -> Result<()> {
     let dir = Path::new(&name);
     if dir.exists() {
-        anyhow::bail!("Directory '{}' already exists", name);
+        anyhow::bail!(
+            "Directory '{}' already exists.\n  • Choose a different project name, or remove the existing directory first.",
+            name
+        );
     }
 
     p::header(&format!("Scaffolding Soroban contract: {}", name));
     println!("  Template: {}\n", template.cyan());
+
+    // Roll back the partially-created directory if any step below fails.
+    let mut target_guard = PathCleanup::new(dir.to_path_buf());
 
     p::step(1, 4, "Creating directory structure…");
     fs::create_dir_all(dir.join("src"))?;
@@ -229,6 +235,9 @@ fn scaffold_contract(
     p::step(4, 4, "Writing README.md…");
     fs::write(dir.join("README.md"), readme(&name, &template, source))?;
 
+    // Scaffolding completed: keep the directory.
+    target_guard.commit();
+
     println!();
     p::success(&format!("Contract '{}' scaffolded!", name));
     println!();
@@ -260,15 +269,10 @@ fn scaffold_dapp(name: String) -> Result<()> {
 
     p::step(3, 3, "Writing app scaffold…");
     fs::write(dir.join("index.html"), dapp_index(&name))?;
-    fs::write(dir.join("src/main.jsx"), dapp_main(typescript, wallet_kit))?;
+    fs::write(dir.join("src/main.jsx"), dapp_main())?;
     fs::write(dir.join("src/App.jsx"), dapp_app(&name))?;
     fs::write(dir.join(".gitignore"), "node_modules/\ndist/\n")?;
     fs::write(dir.join("README.md"), dapp_readme(&name))?;
-    fs::write(dir.join("index.html"),     dapp_index(&name))?;
-    fs::write(dir.join("src/main.jsx"),   dapp_main())?;
-    fs::write(dir.join("src/App.jsx"),    dapp_app(&name))?;
-    fs::write(dir.join(".gitignore"),     "node_modules/\ndist/\n")?;
-    fs::write(dir.join("README.md"),      dapp_readme(&name))?;
 
     println!();
     p::success(&format!("dApp '{}' scaffolded!", name));
@@ -751,24 +755,6 @@ mod test {{
 
 // ── dApp scaffold files ───────────────────────────────────────────────────────
 
-fn dapp_package(name: &str, typescript: bool, wallet_kit: bool) -> String {
-    let env_block = if wallet_kit {
-        "    \"VITE_NETWORK\": \"testnet\"\n"
-    } else {
-        "    \"VITE_NETWORK\": \"testnet\"\n"
-    };
-    let wallet_deps = if wallet_kit {
-        "\n    \"@creit.tech/stellar-wallets-kit\": \"^0.1.0\","
-    } else {
-        ""
-    };
-    let ts_deps = if typescript {
-        ",\n    \"typescript\": \"^5.0.0\""
-    } else {
-        ""
-    };
-    format!(
-        r#"{{
 fn dapp_package(name: &str) -> String {
     format!(r#"{{
   "name": "{name}",
@@ -824,16 +810,6 @@ fn dapp_vite_env_types(wallet_kit: bool) -> String {
     }
 }
 
-fn dapp_main(typescript: bool, wallet_kit: bool) -> String {
-    let app_import = if typescript { "./App.tsx" } else { "./App.jsx" };
-    let root_el = if typescript {
-        "document.getElementById('root')!"
-    } else {
-        "document.getElementById('root')"
-    };
-
-    let mut out = format!(
-        r#"import React from 'react'
 fn dapp_main() -> &'static str {
     r#"import React from 'react'
 import ReactDOM from 'react-dom/client'
@@ -962,52 +938,152 @@ fn handle_template_search(query: &str, tags: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// RAII guard that removes a filesystem path when dropped, unless it has been
+/// committed. This gives clean rollback for partial template installs: if any
+/// step fails and the function returns early, the partially-written directory
+/// is removed automatically while the error unwinds.
+struct PathCleanup {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl PathCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    /// Keep the directory instead of removing it on drop.
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PathCleanup {
+    fn drop(&mut self) {
+        if !self.committed && self.path.exists() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Run a single install step behind a spinner, finishing with a check mark on
+/// success or clearing the spinner and attaching an actionable message on
+/// failure.
+fn install_step<T>(
+    label: &str,
+    done: &str,
+    action: impl FnOnce() -> Result<T>,
+    err_context: impl FnOnce() -> String,
+) -> Result<T> {
+    let pb = p::spinner(label);
+    match action() {
+        Ok(value) => {
+            pb.finish_with_message(format!("✓ {}", done));
+            Ok(value)
+        }
+        Err(e) => {
+            pb.finish_and_clear();
+            Err(e).with_context(err_context)
+        }
+    }
+}
+
 fn scaffold_from_marketplace(name: String, template_name: String) -> Result<()> {
     p::header(&format!("Scaffolding from Marketplace: {}", template_name));
-    
+
     // Get template from registry
-    let template = templates::get_template(&template_name)
-        .with_context(|| format!("Template '{}' not found. Try: starforge new contract --search {}", 
-            template_name, template_name))?;
-    
+    let template = templates::get_template(&template_name).with_context(|| {
+        format!(
+            "Template '{}' not found in the registry.\n  • List templates with `starforge template list`.\n  • Search with `starforge new contract --search {}`.",
+            template_name, template_name
+        )
+    })?;
+
     let dir = Path::new(&name);
     if dir.exists() {
-        anyhow::bail!("Directory '{}' already exists", name);
+        anyhow::bail!(
+            "Directory '{}' already exists.\n  • Choose a different project name, or remove the existing directory first.",
+            name
+        );
     }
-    
+
     p::separator();
     p::kv("Template", &template.name);
     p::kv("Version", &template.version);
     p::kv("Author", &template.author);
     p::kv("Description", &template.description);
     p::separator();
-    
     println!();
-    p::step(1, 3, "Fetching template...");
-    
-    // Create temporary directory for template
-    let temp_dir = std::env::temp_dir().join(format!("starforge-template-{}", uuid::Uuid::new_v4()));
-    templates::fetch_template(&template, &temp_dir)?;
-    
-    p::step(2, 3, "Validating template structure...");
-    templates::validate_template_structure(&temp_dir)?;
-    
-    p::step(3, 3, "Copying template to project directory...");
-    
-    // Copy template to target directory
-    fs::create_dir_all(dir)?;
-    copy_template_contents(&temp_dir, dir, &name)?;
-    
-    // Clean up temp directory
-    fs::remove_dir_all(&temp_dir).ok();
-    
-    // Update download count
-    let mut registry = templates::load_registry()?;
-    if let Some(entry) = registry.templates.iter_mut().find(|t| t.name == template.name) {
-        entry.downloads += 1;
-        templates::save_registry(&registry)?;
+
+    // Stage the download in a temporary directory. The guard guarantees the
+    // temp dir is removed whether the install succeeds or fails.
+    let temp_dir =
+        std::env::temp_dir().join(format!("starforge-template-{}", uuid::Uuid::new_v4()));
+    let temp_guard = PathCleanup::new(temp_dir.clone());
+
+    // The target project directory is only kept if every step succeeds.
+    let mut target_guard = PathCleanup::new(dir.to_path_buf());
+
+    install_step(
+        &format!("[1/3] Fetching template '{}'…", template.name),
+        &format!("Fetched template '{}'", template.name),
+        || templates::fetch_template(&template, &temp_dir),
+        || {
+            format!(
+                "Failed to fetch template '{}' from {}.\n  • Check your network connection and that `git` is installed.\n  • The partial download was rolled back automatically.",
+                template.name, template.source
+            )
+        },
+    )?;
+
+    install_step(
+        "[2/3] Validating template structure…",
+        "Template structure is valid",
+        || templates::validate_template_structure(&temp_dir),
+        || {
+            format!(
+                "Template '{}' is missing required files (expected Cargo.toml, src/ and src/lib.rs).\n  • The template may be malformed; contact its author or pick another.\n  • The partial install was rolled back automatically.",
+                template.name
+            )
+        },
+    )?;
+
+    install_step(
+        "[3/3] Installing into project directory…",
+        &format!("Installed into '{}'", name),
+        || {
+            fs::create_dir_all(dir).with_context(|| {
+                format!("Failed to create project directory '{}'", dir.display())
+            })?;
+            copy_template_contents(&temp_dir, dir, &name)
+        },
+        || {
+            format!(
+                "Failed to install template into '{}'.\n  • Check that you have write permission for this location and enough disk space.\n  • The half-written project directory was rolled back automatically.",
+                name
+            )
+        },
+    )?;
+
+    // Everything succeeded: keep the project directory; the temp dir is removed
+    // by its guard when this function returns.
+    target_guard.commit();
+    drop(temp_guard);
+
+    // Update download count (best-effort; failure here must not roll back a
+    // successfully installed project).
+    if let Ok(mut registry) = templates::load_registry() {
+        if let Some(entry) = registry.templates.iter_mut().find(|t| t.name == template.name) {
+            entry.downloads += 1;
+            if let Err(e) = templates::save_registry(&registry) {
+                p::warn(&format!("Installed, but could not update download count: {}", e));
+            }
+        }
     }
-    
+
     println!();
     p::success(&format!("Contract '{}' scaffolded from marketplace!", name));
     println!();
@@ -1019,7 +1095,7 @@ fn scaffold_from_marketplace(name: String, template_name: String) -> Result<()> 
         name.replace('-', "_")
     ));
     println!();
-    
+
     Ok(())
 }
 
@@ -1047,10 +1123,46 @@ fn copy_template_contents(src: &Path, dst: &Path, project_name: &str) -> Result<
             content = content.replace("{{PROJECT_NAME}}", project_name);
             content = content.replace("{{PROJECT_NAME_SNAKE}}", &project_name.replace('-', "_"));
             content = content.replace("{{PROJECT_NAME_PASCAL}}", &to_pascal(project_name));
-            
+
             fs::write(&dest_path, content)?;
         }
     }
-    
+
     Ok(())
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::PathCleanup;
+    use std::fs;
+
+    #[test]
+    fn cleanup_removes_dir_when_not_committed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("partial-install");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "partial").unwrap();
+        assert!(dir.exists());
+
+        {
+            let _guard = PathCleanup::new(dir.clone());
+            // guard dropped here without commit -> directory should be removed
+        }
+
+        assert!(!dir.exists(), "uncommitted install should be rolled back");
+    }
+
+    #[test]
+    fn cleanup_keeps_dir_when_committed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("good-install");
+        fs::create_dir_all(&dir).unwrap();
+
+        {
+            let mut guard = PathCleanup::new(dir.clone());
+            guard.commit();
+        }
+
+        assert!(dir.exists(), "committed install should be kept");
+    }
 }

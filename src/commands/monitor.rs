@@ -132,7 +132,7 @@ fn monitor_contract(
         }
     }
 
-    let rpc_url = soroban::rpc_url(network);
+    let rpc_url = soroban::rpc_url(network)?;
 
     notifications::info(&format!(
         "Streaming contract events from {}.",

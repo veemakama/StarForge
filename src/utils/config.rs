@@ -99,14 +99,28 @@ pub fn validate_network(network: &str) -> Result<()> {
 pub fn validate_secret_key(secret: &str) -> Result<()> {
     if secret.contains(':') {
         let parts: Vec<&str> = secret.split(':').collect();
-        if parts.len() != 3 {
-            anyhow::bail!("Invalid encrypted secret bundle format");
+        // Accept both 3-part (legacy: salt:nonce:ciphertext) and 5-part (with KDF: salt:nonce:ciphertext:mem:iterations)
+        if parts.len() != 3 && parts.len() != 5 {
+            anyhow::bail!("Invalid encrypted secret bundle format: expected 3 or 5 parts, got {}", parts.len());
         }
-        for part in parts {
+        
+        // Validate base64 parts (first 3 parts are always base64)
+        for i in 0..3 {
             BASE64
-                .decode(part)
-                .map_err(|_| anyhow::anyhow!("Invalid base64 in encrypted secret bundle"))?;
+                .decode(parts[i])
+                .map_err(|_| anyhow::anyhow!("Invalid base64 in encrypted secret bundle at part {}", i))?;
         }
+        
+        // If 5-part bundle, validate KDF parameters are valid u32
+        if parts.len() == 5 {
+            parts[3]
+                .parse::<u32>()
+                .map_err(|_| anyhow!("Invalid KDF memory cost: must be a valid u32"))?;
+            parts[4]
+                .parse::<u32>()
+                .map_err(|_| anyhow!("Invalid KDF iteration count: must be a valid u32"))?;
+        }
+        
         return Ok(());
     }
 
@@ -182,6 +196,8 @@ pub struct NetworkConfig {
     pub horizon_url: String,
     pub soroban_rpc_url: Option<String>,
     pub friendbot_url: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -213,6 +229,7 @@ impl Default for Config {
                 horizon_url: "https://horizon-testnet.stellar.org".to_string(),
                 soroban_rpc_url: Some("https://soroban-testnet.stellar.org".to_string()),
                 friendbot_url: Some("https://friendbot.stellar.org".to_string()),
+                passphrase: Some("Test SDF Network ; September 2015".to_string()),
             },
         );
         networks.insert(
@@ -221,6 +238,7 @@ impl Default for Config {
                 horizon_url: "https://horizon.stellar.org".to_string(),
                 soroban_rpc_url: Some("https://mainnet.sorobanrpc.com".to_string()),
                 friendbot_url: None,
+                passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
             },
         );
         networks.insert(
@@ -229,6 +247,7 @@ impl Default for Config {
                 horizon_url: "http://localhost:8000".to_string(),
                 soroban_rpc_url: Some("http://localhost:8000/rpc".to_string()),
                 friendbot_url: None,
+                passphrase: Some("Test SDF Network ; September 2015".to_string()),
             },
         );
 
@@ -349,6 +368,9 @@ pub fn load() -> Result<Config> {
     // Migrate config if needed
     config = migrate_config(config)?;
 
+    // Guarantee built-in networks are always present
+    ensure_default_networks(&mut config);
+
     // Save migrated config
     if config.version != CURRENT_CONFIG_VERSION {
         save(&config)?;
@@ -461,6 +483,45 @@ mod tests {
     }
 }
 
+/// Returns the network passphrase for transaction signing.
+/// Checks the config for a custom passphrase; falls back to well-known defaults.
+pub fn get_network_passphrase(network: &str) -> String {
+    if let Ok(cfg) = load() {
+        if let Some(net_cfg) = cfg.networks.get(network) {
+            if let Some(passphrase) = &net_cfg.passphrase {
+                return passphrase.clone();
+            }
+        }
+    }
+    match network {
+        "mainnet" => "Public Global Stellar Network ; September 2015".to_string(),
+        _ => "Test SDF Network ; September 2015".to_string(),
+    }
+}
+
+/// Ensures the three built-in networks are present in the config's network map.
+/// Safe to call on any Config — existing entries are never overwritten.
+pub fn ensure_default_networks(cfg: &mut Config) {
+    cfg.networks.entry("testnet".to_string()).or_insert_with(|| NetworkConfig {
+        horizon_url: "https://horizon-testnet.stellar.org".to_string(),
+        soroban_rpc_url: Some("https://soroban-testnet.stellar.org".to_string()),
+        friendbot_url: Some("https://friendbot.stellar.org".to_string()),
+        passphrase: Some("Test SDF Network ; September 2015".to_string()),
+    });
+    cfg.networks.entry("mainnet".to_string()).or_insert_with(|| NetworkConfig {
+        horizon_url: "https://horizon.stellar.org".to_string(),
+        soroban_rpc_url: Some("https://mainnet.sorobanrpc.com".to_string()),
+        friendbot_url: None,
+        passphrase: Some("Public Global Stellar Network ; September 2015".to_string()),
+    });
+    cfg.networks.entry("docker-testnet".to_string()).or_insert_with(|| NetworkConfig {
+        horizon_url: "http://localhost:8000".to_string(),
+        soroban_rpc_url: Some("http://localhost:8000/rpc".to_string()),
+        friendbot_url: None,
+        passphrase: Some("Test SDF Network ; September 2015".to_string()),
+    });
+}
+
 pub fn save(config: &Config) -> Result<()> {
     let dir = config_dir();
     if !dir.exists() {
@@ -479,13 +540,22 @@ pub fn get_network_config(cfg: &Config, network: &str) -> Result<NetworkConfig> 
         .ok_or_else(|| anyhow::anyhow!("Network '{}' not found in configuration", network))
 }
 
+const RESERVED_NETWORKS: &[&str] = &["testnet", "mainnet", "docker-testnet"];
+
 pub fn add_custom_network(
     config: &mut Config,
     name: String,
     horizon_url: String,
     soroban_rpc_url: Option<String>,
     friendbot_url: Option<String>,
+    passphrase: Option<String>,
 ) -> Result<()> {
+    if RESERVED_NETWORKS.contains(&name.as_str()) {
+        anyhow::bail!(
+            "'{}' is a reserved network name ('testnet', 'mainnet', 'docker-testnet'). Choose a different name.",
+            name
+        );
+    }
     if config.networks.contains_key(&name) {
         anyhow::bail!("Network '{}' already exists", name);
     }
@@ -495,6 +565,7 @@ pub fn add_custom_network(
             horizon_url,
             soroban_rpc_url,
             friendbot_url,
+            passphrase,
         },
     );
     Ok(())

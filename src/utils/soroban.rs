@@ -1,4 +1,4 @@
-use crate::utils::config::WalletEntry;
+use crate::utils::config::{self, WalletEntry};
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use stellar_strkey::{ed25519, Contract};
@@ -107,7 +107,7 @@ pub fn simulate_transaction(
     arg_types: &[String],
     network: &str,
 ) -> Result<SimulationResult> {
-    let rpc_url = get_rpc_url(network);
+    let rpc_url = get_rpc_url(network)?;
 
     // Convert arguments to XDR ScVal format
     let xdr_args = encode_arguments(args, arg_types)?;
@@ -144,7 +144,7 @@ pub fn simulate_deploy_transaction(
     network: &str,
     wallet: &WalletEntry,
 ) -> Result<SimulationResult> {
-    let rpc_url = get_rpc_url(network);
+    let rpc_url = get_rpc_url(network)?;
     let request = SorobanRpcRequest {
         jsonrpc: "2.0".to_string(),
         id: 1,
@@ -173,7 +173,7 @@ pub fn submit_transaction(
     network: &str,
     wallet: &WalletEntry,
 ) -> Result<TransactionResult> {
-    let rpc_url = get_rpc_url(network);
+    let rpc_url = get_rpc_url(network)?;
 
     // Convert arguments to XDR ScVal format
     let xdr_args = encode_arguments(args, arg_types)?;
@@ -210,7 +210,8 @@ pub fn upload_wasm(
 ) -> Result<String> {
     use std::process::Command;
 
-    let rpc_url = get_rpc_url(network);
+    let rpc_url = get_rpc_url(network)?;
+    let passphrase = config::get_network_passphrase(network);
 
     let output = Command::new("stellar")
         .args([
@@ -223,11 +224,7 @@ pub fn upload_wasm(
             "--source",
             &wallet.name,
             "--network-passphrase",
-            if network == "mainnet" {
-                "Public Global Stellar Network ; September 2015"
-            } else {
-                "Test SDF Network ; September 2015"
-            },
+            &passphrase,
         ])
         .output()
         .context("Failed to run `stellar contract upload`. Is the Stellar CLI installed?")?;
@@ -255,7 +252,7 @@ pub fn inspect_contract(contract_id: &str, network: &str) -> Result<ContractInsp
         }),
     };
 
-    let response: GetLedgerEntriesResult = rpc_request_with_url(&get_rpc_url(network), request)
+    let response: GetLedgerEntriesResult = rpc_request_with_url(&get_rpc_url(network)?, request)
         .with_context(|| {
             format!(
                 "Failed to inspect contract '{}' on {}",
@@ -266,15 +263,25 @@ pub fn inspect_contract(contract_id: &str, network: &str) -> Result<ContractInsp
     parse_contract_inspect_result(contract_id, network, response)
 }
 
-fn get_rpc_url(network: &str) -> String {
-    match network {
-        "mainnet" => "https://mainnet.sorobanrpc.com".to_string(),
-        "docker-testnet" => "http://localhost:8000/rpc".to_string(),
-        _ => "https://soroban-testnet.stellar.org".to_string(),
+fn get_rpc_url(network: &str) -> Result<String> {
+    let cfg = config::load()?;
+    match cfg.networks.get(network) {
+        Some(net_cfg) => match &net_cfg.soroban_rpc_url {
+            Some(url) => Ok(url.clone()),
+            None => anyhow::bail!(
+                "Network '{}' has no Soroban RPC URL configured. \
+                 Use 'starforge network add --soroban-rpc-url <url>' to set one.",
+                network
+            ),
+        },
+        None => anyhow::bail!(
+            "Network '{}' not found. Use 'starforge network add' to create it.",
+            network
+        ),
     }
 }
 
-pub fn rpc_url(network: &str) -> String {
+pub fn rpc_url(network: &str) -> Result<String> {
     get_rpc_url(network)
 }
 

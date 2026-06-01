@@ -180,6 +180,7 @@ fn main() {
 
 fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {
     use anyhow::Context;
+    use plugins::registry::TrustLevel;
 
     if args.is_empty() {
         anyhow::bail!("No plugin command provided");
@@ -193,6 +194,14 @@ fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {
         anyhow::bail!(
             "Unknown command '{}'. No plugins installed.\n\nTry: starforge plugin install <name> --path <lib>",
             plugin_name
+        );
+    }
+
+    // Warn about unknown-trust plugins before loading.
+    for pl in reg.plugins.iter().filter(|p| p.trust == TrustLevel::Unknown && !p.source.is_empty()) {
+        eprintln!(
+            "  ⚠  Warning: plugin '{}' is from an untrusted source: {}",
+            pl.name, pl.source
         );
     }
 

@@ -1,3 +1,4 @@
+use crate::utils::config;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -235,10 +236,7 @@ pub fn build_multisig_transaction_xdr(
     // This is a simplified mock implementation
     // In production, use stellar-xdr to build proper transaction XDR
 
-    let _network_passphrase = match network {
-        "mainnet" => "Public Global Stellar Network ; September 2015",
-        _ => "Test SDF Network ; September 2015",
-    };
+    let _network_passphrase = config::get_network_passphrase(network);
 
     // Mock XDR generation
     let mock_xdr = format!(
@@ -260,10 +258,7 @@ pub fn sign_transaction_partial(
     // This is a simplified mock implementation
     // In production, use stellar-xdr and ed25519 signing
 
-    let _network_passphrase = match network {
-        "mainnet" => "Public Global Stellar Network ; September 2015",
-        _ => "Test SDF Network ; September 2015",
-    };
+    let _network_passphrase = config::get_network_passphrase(network);
 
     // Mock signing
     let signature = format!("sig_{}_{}", &secret_key[..8], &transaction_xdr[..16]);

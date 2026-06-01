@@ -418,10 +418,7 @@ fn build_batch_transaction_xdr(
         anyhow::bail!("Batch transaction requires at least one operation");
     }
 
-    let _network_passphrase = match network {
-        "mainnet" => "Public Global Stellar Network ; September 2015",
-        _ => "Test SDF Network ; September 2015",
-    };
+    let _network_passphrase = config::get_network_passphrase(network);
 
     let op_parts: Vec<String> = operations
         .iter()
@@ -468,11 +465,8 @@ fn build_account_merge_transaction_xdr(
     Ok(general_purpose::STANDARD.encode(mock_xdr))
 }
 
-fn network_passphrase(network: &str) -> &'static str {
-    match network {
-        "mainnet" => "Public Global Stellar Network ; September 2015",
-        _ => "Test SDF Network ; September 2015",
-    }
+fn network_passphrase(network: &str) -> String {
+    config::get_network_passphrase(network)
 }
 
 fn build_payment_transaction_xdr(
@@ -511,10 +505,7 @@ fn sign_transaction_xdr(transaction_xdr: &str, secret_key: &str, network: &str) 
     // This is a simplified mock implementation
     // In production, you'd use stellar-xdr and ed25519 signing
 
-    let _network_passphrase = match network {
-        "mainnet" => "Public Global Stellar Network ; September 2015",
-        _ => "Test SDF Network ; September 2015",
-    };
+    let _network_passphrase = config::get_network_passphrase(network);
 
     // Mock signing - in reality this would involve:
     // 1. Decode the transaction XDR

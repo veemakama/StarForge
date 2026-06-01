@@ -23,6 +23,36 @@ starforge template list
 starforge template show uniswap-v2
 ```
 
+#### Relevance ranking, filters and explanations
+
+Search ranks results by **text relevance** first (name matches outweigh tag
+matches, which outweigh description matches), then by quality score, then by
+downloads. Each result explains *why* it matched so the list is easy to scan.
+
+```bash
+# Rank by relevance to the query
+starforge template search token
+
+# Require specific tags (a template must have all of them)
+starforge template search "" --tags defi,dex
+
+# Only verified templates
+starforge template search wallet --verified
+
+# Only high-quality templates (score 0-100)
+starforge template search defi --min-quality 70
+
+# List everything ranked by quality (empty query)
+starforge template search
+```
+
+Each result shows the matched fields and a relevance value, e.g.:
+
+```
+   1. uniswap-v2@1.0.0  [quality 92/100]  ✓ Verified  📖 Documented  ★ Popular (1240 downloads)
+      Matched: name, tag: defi (relevance 70)
+```
+
 ### 2. Template Usage
 Scaffold new projects using marketplace templates:
 
@@ -355,6 +385,80 @@ latest version.
    is removed and the template is re-cloned with `git clone --depth 1`.
 4. `template_source_content` reads `src/lib.rs` from the cached directory and
    returns it to the scaffolding step.
+
+## Quality Signals & Trust Indicators
+
+To help users identify dependable templates in a growing community catalog,
+each template carries lightweight quality metadata that is surfaced across the
+`list`, `search` and `show` commands.
+
+### Metadata fields
+
+| Field         | Meaning                                                        |
+|---------------|----------------------------------------------------------------|
+| `verified`    | Template has been vetted by maintainers                        |
+| `documented`  | Template ships user-facing documentation (e.g. a README)       |
+| `maintenance` | Maintenance state: `active`, `maintained`, `deprecated`, `unknown` |
+| `downloads`   | Usage metadata used as a proxy for community confidence        |
+
+Example registry entry:
+
+```json
+{
+  "name": "uniswap-v2",
+  "version": "1.0.0",
+  "verified": true,
+  "documented": true,
+  "maintenance": "active",
+  "downloads": 1240
+}
+```
+
+### Quality score
+
+Each template is assigned a `0-100` quality score blending the signals above:
+
+- Verified: `+40`
+- Documented: `+20`
+- Usage: up to `+30` (scaled by downloads, capped)
+- Maintenance: `active +10`, `maintained +5`, `deprecated -25`
+
+The score drives ranking in `starforge template search` (highest quality
+first, with raw downloads breaking ties) and is shown alongside trust badges
+such as `✓ Verified`, `📖 Documented`, `🟢 Actively maintained` and
+`★ Popular`. This makes trusted, well-documented and well-maintained templates
+easier to discover.
+
+## Installation Progress & Recovery
+
+Installing a marketplace template runs through three visible steps, each shown
+with a spinner that resolves to a check mark:
+
+```
+✓ Fetched template 'uniswap-v2'
+✓ Template structure is valid
+✓ Installed into 'my-dex'
+```
+
+### Safe rollback
+
+Installation is **atomic from the user's point of view**: if any step fails the
+partially-written files are removed automatically, so you never end up with a
+half-installed project directory.
+
+- The download is staged in a temporary directory that is always cleaned up.
+- The target project directory is only kept once every step succeeds; on
+  failure it is rolled back.
+
+### Actionable errors
+
+When a step fails, the error explains what went wrong and how to recover, e.g.:
+
+```
+Failed to fetch template 'uniswap-v2' from git:https://github.com/...
+  • Check your network connection and that `git` is installed.
+  • The partial download was rolled back automatically.
+```
 
 ## Support
 

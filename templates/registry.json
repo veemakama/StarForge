@@ -15,7 +15,9 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 1240,
-      "verified": true
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
     },
     {
       "name": "lending-pool",
@@ -31,7 +33,9 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 874,
-      "verified": true
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
     },
     {
       "name": "governance",
@@ -47,7 +51,9 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 512,
-      "verified": false
+      "verified": false,
+      "documented": true,
+      "maintenance": "maintained"
     },
     {
       "name": "multisig-wallet",
@@ -63,7 +69,9 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 389,
-      "verified": false
+      "verified": false,
+      "documented": false,
+      "maintenance": "maintained"
     },
     {
       "name": "sep-41-token",
@@ -79,7 +87,9 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 156,
-      "verified": true
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
     },
     {
       "name": "sep-10-auth",
@@ -95,7 +105,60 @@
       "created_at": "2025-01-01T00:00:00Z",
       "updated_at": "2025-01-01T00:00:00Z",
       "downloads": 98,
-      "verified": true
+      "verified": true,
+      "documented": false,
+      "maintenance": "maintained"
+    },
+    {
+      "name": "escrow",
+      "version": "1.0.0",
+      "description": "Token escrow with buyer, seller and arbiter for marketplaces and OTC trades",
+      "author": "StarForge",
+      "tags": ["defi", "escrow", "payments", "marketplace"],
+      "source": {
+        "type": "builtin",
+        "id": "escrow"
+      },
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z",
+      "downloads": 0,
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
+    },
+    {
+      "name": "dao-governance",
+      "version": "1.0.0",
+      "description": "Minimal DAO governance with member proposals and one-member-one-vote tallying",
+      "author": "StarForge",
+      "tags": ["dao", "governance", "voting"],
+      "source": {
+        "type": "builtin",
+        "id": "dao-governance"
+      },
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z",
+      "downloads": 0,
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
+    },
+    {
+      "name": "multisig-vault",
+      "version": "1.0.0",
+      "description": "Threshold M-of-N multi-signature vault for shared-custody token transfers",
+      "author": "StarForge",
+      "tags": ["wallet", "multisig", "security", "treasury"],
+      "source": {
+        "type": "builtin",
+        "id": "multisig-vault"
+      },
+      "created_at": "2025-01-01T00:00:00Z",
+      "updated_at": "2025-01-01T00:00:00Z",
+      "downloads": 0,
+      "verified": true,
+      "documented": true,
+      "maintenance": "active"
     }
   ]
 }

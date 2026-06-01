@@ -33,13 +33,11 @@ stellar-xdr = { version = "22.0.0", features = ["serde"] }
 base64     = "0.21"
 urlencoding = "2.1"
 sha2 = "0.10"
-soroban-sdk = { version = "20.5.0" }
 indicatif = "0.17.7"
 libloading = "0.8.1"
 uuid = { version = "1.6.1", features = ["v4"] }
 hidapi = { version = "2.6.5", optional = true }
 zxcvbn = "=3.1.0"
-sha2 = "0.10"
 hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
