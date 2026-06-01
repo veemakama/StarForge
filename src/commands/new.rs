@@ -219,7 +219,10 @@ fn scaffold_contract(
 
     p::header(&format!("Scaffolding Soroban contract: {}", name));
     println!("  Template: {}\n", template.cyan());
-
+    // Ensure selected template is compatible with current CLI version
+    let entry = templates::get_template(&template)?;
+    templates::assert_template_compatible(&entry)?;
+    
     // Roll back the partially-created directory if any step below fails.
     let mut target_guard = PathCleanup::new(dir.to_path_buf());
 
