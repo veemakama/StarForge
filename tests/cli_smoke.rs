@@ -173,6 +173,77 @@ fn network_switch_unknown_network_fails() {
 }
 
 #[test]
+fn network_remove_custom_succeeds() {
+    let home = isolated_home();
+    starforge(home.path())
+        .args([
+            "network",
+            "add",
+            "removable-net",
+            "--horizon-url",
+            "https://example.com/horizon",
+        ])
+        .output()
+        .expect("spawn network add");
+
+    let output = starforge(home.path())
+        .args(["network", "remove", "removable-net"])
+        .output()
+        .expect("spawn network remove");
+    assert_success(&output, "starforge network remove");
+
+    let show = starforge(home.path())
+        .args(["network", "show"])
+        .output()
+        .expect("spawn network show");
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        !stdout.to_lowercase().contains("removable-net"),
+        "removed network should not appear in show output"
+    );
+}
+
+#[test]
+fn network_remove_reserved_fails() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["network", "remove", "testnet"])
+        .output()
+        .expect("spawn network remove testnet");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("built-in") || stderr.contains("cannot be removed"));
+}
+
+#[test]
+fn network_rename_custom_succeeds() {
+    let home = isolated_home();
+    starforge(home.path())
+        .args([
+            "network",
+            "add",
+            "old-net",
+            "--horizon-url",
+            "https://example.com/horizon",
+        ])
+        .output()
+        .expect("spawn network add");
+
+    let output = starforge(home.path())
+        .args(["network", "rename", "old-net", "new-net"])
+        .output()
+        .expect("spawn network rename");
+    assert_success(&output, "starforge network rename");
+
+    let show = starforge(home.path())
+        .args(["network", "show"])
+        .output()
+        .expect("spawn network show");
+    let stdout = String::from_utf8_lossy(&show.stdout);
+    assert!(stdout.to_lowercase().contains("new-net"));
+}
+
+#[test]
 fn network_add_reserved_name_fails() {
     let home = isolated_home();
     let output = starforge(home.path())

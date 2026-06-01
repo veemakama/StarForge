@@ -30,6 +30,32 @@ pub enum TemplateCommands {
         /// Template name
         name: String,
     },
+    /// Install a template from a directory or .zip archive into the local registry
+    Install {
+        /// Path to template directory or .zip package
+        path: PathBuf,
+        /// Template name (defaults to directory/archive stem)
+        #[arg(long)]
+        name: Option<String>,
+        /// Template description
+        #[arg(long)]
+        description: Option<String>,
+        /// Author name
+        #[arg(long)]
+        author: Option<String>,
+        /// Tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+        /// Version
+        #[arg(long, default_value = "1.0.0")]
+        version: String,
+        /// Minimum StarForge CLI version required
+        #[arg(long)]
+        cli_version_min: Option<String>,
+        /// Maximum StarForge CLI version supported
+        #[arg(long)]
+        cli_version_max: Option<String>,
+    },
     /// Publish a template to the local marketplace
     Publish {
         /// Path to the template directory
@@ -79,6 +105,25 @@ pub enum TemplateCommands {
 
 pub fn handle(cmd: TemplateCommands) -> Result<()> {
     match cmd {
+        TemplateCommands::Install {
+            path,
+            name,
+            description,
+            author,
+            tags,
+            version,
+            cli_version_min,
+            cli_version_max,
+        } => install(
+            path,
+            name,
+            description,
+            author,
+            tags,
+            version,
+            cli_version_min,
+            cli_version_max,
+        ),
         TemplateCommands::Publish {
             path,
             name,
@@ -118,6 +163,31 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
         TemplateCommands::Remove { name } => remove(name),
         TemplateCommands::Init => init(),
     }
+}
+
+fn install(
+    path: PathBuf,
+    name: Option<String>,
+    description: Option<String>,
+    author: Option<String>,
+    tags: Option<String>,
+    version: String,
+    cli_version_min: Option<String>,
+    cli_version_max: Option<String>,
+) -> Result<()> {
+    publish(
+        path,
+        name,
+        description,
+        author,
+        tags,
+        version,
+        cli_version_min,
+        cli_version_max,
+    )?;
+    p::header("Template Install");
+    p::info("Template package installed into the local registry.");
+    Ok(())
 }
 
 fn publish(

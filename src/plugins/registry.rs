@@ -69,12 +69,12 @@ pub struct InstalledPlugin {
     /// Trust level assigned at install time.
     #[serde(default)]
     pub trust: TrustLevel,
-    /// Version string reported by the plugin at install time, if available.
+    /// StarForge CLI version from plugin manifest at install time.
     #[serde(default)]
-    pub version: Option<String>,
-    /// ISO-8601 timestamp of the last successful update or install.
+    pub starforge_version: String,
+    /// Plugin version from manifest.
     #[serde(default)]
-    pub installed_at: Option<String>,
+    pub plugin_version: String,
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -105,11 +105,54 @@ pub fn save_registry(reg: &PluginRegistry) -> Result<()> {
     Ok(())
 }
 
+/// Options for uninstalling a plugin.
+#[derive(Debug, Clone, Default)]
+pub struct UninstallOptions {
+    /// Delete the plugin library file from disk.
+    pub purge_files: bool,
+    /// Skip interactive confirmation for destructive removal.
+    pub assume_yes: bool,
+}
+
+/// Report returned after uninstalling a plugin.
+#[derive(Debug, Clone)]
+pub struct UninstallReport {
+    pub name: String,
+    pub library_path: String,
+    pub files_removed: bool,
+    pub library_was_missing: bool,
+}
+
+fn plugins_data_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    Ok(home.join(".starforge").join("plugins"))
+}
+
+/// Returns true if `path` is under the StarForge plugins directory (safe to purge).
+pub fn is_managed_plugin_path(path: &Path) -> bool {
+    if let Ok(dir) = plugins_data_dir() {
+        if let (Ok(path), Ok(dir)) = (path.canonicalize(), dir.canonicalize()) {
+            return path.starts_with(&dir);
+        }
+        if let Some(parent) = dirs::home_dir() {
+            let prefix = parent.join(".starforge").join("plugins");
+            return path.starts_with(&prefix);
+        }
+    }
+    false
+}
+
 /// Install a plugin into the registry.
 ///
 /// `source` is the URL or identifier where the plugin came from; pass an
 /// empty string when the user supplied `--path` directly.
-pub fn install_plugin(name: &str, library_path: &Path, source: &str) -> Result<()> {
+pub fn install_plugin(
+    name: &str,
+    library_path: &Path,
+    source: &str,
+    starforge_version: &str,
+    plugin_version: &str,
+) -> Result<()> {
     if !library_path.exists() {
         anyhow::bail!("Plugin library not found: {}", library_path.display());
     }
@@ -130,12 +173,78 @@ pub fn install_plugin(name: &str, library_path: &Path, source: &str) -> Result<(
         path: library_path.display().to_string(),
         source: source.to_string(),
         trust,
-        version: existing_version,
-        installed_at: Some(now),
+        starforge_version: starforge_version.to_string(),
+        plugin_version: plugin_version.to_string(),
     });
     reg.plugins.sort_by(|a, b| a.name.cmp(&b.name));
     save_registry(&reg)?;
     Ok(())
+}
+
+/// Remove a plugin from the registry and optionally delete its library file.
+pub fn uninstall_plugin(name: &str, opts: &UninstallOptions) -> Result<UninstallReport> {
+    let mut reg = load_registry().unwrap_or_default();
+    let idx = reg
+        .plugins
+        .iter()
+        .position(|p| p.name == name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Plugin '{}' is not installed. Run `starforge plugin list` to see installed plugins.",
+                name
+            )
+        })?;
+
+    let plugin = reg.plugins.remove(idx);
+    let lib_path = PathBuf::from(&plugin.path);
+    let library_was_missing = !lib_path.exists();
+
+    let mut files_removed = false;
+    if opts.purge_files {
+        if library_was_missing {
+            // Nothing to delete
+        } else if is_managed_plugin_path(&lib_path) {
+            match fs::remove_file(&lib_path) {
+                Ok(()) => {
+                    files_removed = true;
+                    // Remove empty plugin directory if present
+                    if let Some(parent) = lib_path.parent() {
+                        let empty = parent
+                            .read_dir()
+                            .map(|d| d.filter_map(|e| e.ok()).next().is_none())
+                            .unwrap_or(false);
+                        if empty {
+                            let _ = fs::remove_dir(parent);
+                        }
+                    }
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "Failed to remove plugin library at {}: {}. \
+                         The file may be in use (close other StarForge sessions using this plugin) \
+                         or you may lack permission.",
+                        lib_path.display(),
+                        e
+                    );
+                }
+            }
+        } else {
+            anyhow::bail!(
+                "Refusing to delete plugin library outside ~/.starforge/plugins/: {}\n  \
+                 Remove the file manually or reinstall under the managed plugins directory.",
+                lib_path.display()
+            );
+        }
+    }
+
+    save_registry(&reg)?;
+
+    Ok(UninstallReport {
+        name: name.to_string(),
+        library_path: plugin.path,
+        files_removed,
+        library_was_missing,
+    })
 }
 
 pub fn resolve_plugin_library_path(name: &str, explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -247,7 +356,7 @@ mod tests {
     fn install_missing_library_fails() {
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("nonexistent.so");
-        let result = install_plugin("test", &missing, "");
+        let result = install_plugin("test", &missing, "", "0.1.0", "1.0.0");
         assert!(result.is_err(), "installing a missing library must fail");
         assert!(result.unwrap_err().to_string().contains("not found"));
     }

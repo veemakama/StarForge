@@ -549,7 +549,12 @@ pub fn get_network_config(cfg: &Config, network: &str) -> Result<NetworkConfig> 
         .ok_or_else(|| anyhow::anyhow!("Network '{}' not found in configuration", network))
 }
 
-const RESERVED_NETWORKS: &[&str] = &["testnet", "mainnet", "docker-testnet"];
+pub const RESERVED_NETWORKS: &[&str] = &["testnet", "mainnet", "docker-testnet"];
+
+/// Returns true for built-in networks that cannot be removed or renamed.
+pub fn is_reserved_network(name: &str) -> bool {
+    RESERVED_NETWORKS.contains(&name)
+}
 
 pub fn add_custom_network(
     config: &mut Config,
@@ -559,7 +564,7 @@ pub fn add_custom_network(
     friendbot_url: Option<String>,
     passphrase: Option<String>,
 ) -> Result<()> {
-    if RESERVED_NETWORKS.contains(&name.as_str()) {
+    if is_reserved_network(&name) {
         anyhow::bail!(
             "'{}' is a reserved network name ('testnet', 'mainnet', 'docker-testnet'). Choose a different name.",
             name
@@ -577,5 +582,75 @@ pub fn add_custom_network(
             passphrase,
         },
     );
+    Ok(())
+}
+
+/// Remove a custom network from config. Built-in networks are protected.
+pub fn remove_custom_network(config: &mut Config, name: &str) -> Result<()> {
+    if is_reserved_network(name) {
+        anyhow::bail!(
+            "'{}' is a built-in network and cannot be removed. Only custom networks can be removed.",
+            name
+        );
+    }
+    if !config.networks.contains_key(name) {
+        anyhow::bail!("Network '{}' not found", name);
+    }
+    // Only remove if it is not a built-in re-injected entry (custom keys are user-added).
+    config.networks.remove(name);
+
+    if config.network == name {
+        config.network = "testnet".to_string();
+    }
+
+    for wallet in &mut config.wallets {
+        if wallet.network == name {
+            wallet.network = config.network.clone();
+        }
+    }
+
+    Ok(())
+}
+
+/// Rename a custom network. Built-in networks cannot be renamed.
+pub fn rename_custom_network(config: &mut Config, old_name: &str, new_name: &str) -> Result<()> {
+    if is_reserved_network(old_name) {
+        anyhow::bail!(
+            "'{}' is a built-in network and cannot be renamed.",
+            old_name
+        );
+    }
+    if is_reserved_network(new_name) {
+        anyhow::bail!(
+            "'{}' is a reserved network name. Choose a different name.",
+            new_name
+        );
+    }
+    if !config.networks.contains_key(old_name) {
+        anyhow::bail!("Network '{}' not found", old_name);
+    }
+    if config.networks.contains_key(new_name) {
+        anyhow::bail!("Network '{}' already exists", new_name);
+    }
+    if old_name == new_name {
+        anyhow::bail!("Old and new network names are the same");
+    }
+
+    let net_cfg = config
+        .networks
+        .remove(old_name)
+        .expect("network exists");
+    config.networks.insert(new_name.to_string(), net_cfg);
+
+    if config.network == old_name {
+        config.network = new_name.to_string();
+    }
+
+    for wallet in &mut config.wallets {
+        if wallet.network == old_name {
+            wallet.network = new_name.to_string();
+        }
+    }
+
     Ok(())
 }

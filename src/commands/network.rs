@@ -34,6 +34,18 @@ pub enum NetworkCommands {
         #[arg(default_value = None)]
         network: Option<String>,
     },
+    /// Remove a custom network from configuration
+    Remove {
+        /// Name of the custom network to remove
+        name: String,
+    },
+    /// Rename a custom network
+    Rename {
+        /// Current network name
+        old_name: String,
+        /// New network name
+        new_name: String,
+    },
 }
 
 pub fn handle(cmd: NetworkCommands) -> Result<()> {
@@ -54,6 +66,8 @@ pub fn handle(cmd: NetworkCommands) -> Result<()> {
             passphrase,
         ),
         NetworkCommands::Test { network } => test_network(network),
+        NetworkCommands::Remove { name } => remove_network(name),
+        NetworkCommands::Rename { old_name, new_name } => rename_network(old_name, new_name),
     }
 }
 
@@ -208,5 +222,29 @@ fn test_network(network_name: Option<String>) -> Result<()> {
     }
 
     p::info("Network test complete");
+    Ok(())
+}
+
+fn remove_network(name: String) -> Result<()> {
+    let mut cfg = config::load()?;
+
+    let was_active = cfg.network == name;
+    config::remove_custom_network(&mut cfg, &name)?;
+    config::save(&cfg)?;
+
+    p::success(&format!("Network '{}' removed", name));
+    if was_active {
+        p::warn("Active network was removed; switched to testnet.");
+        p::kv("Active network", "testnet");
+    }
+    Ok(())
+}
+
+fn rename_network(old_name: String, new_name: String) -> Result<()> {
+    let mut cfg = config::load()?;
+    config::rename_custom_network(&mut cfg, &old_name, &new_name)?;
+    config::save(&cfg)?;
+
+    p::success(&format!("Network renamed from '{}' to '{}'", old_name, new_name));
     Ok(())
 }

@@ -1,7 +1,8 @@
 use crate::plugins::interface::{
-    is_core_version_compatible, Plugin, PluginDeclaration, PluginRegistrar, CORE_VERSION,
-    RUSTC_VERSION,
+    is_core_version_compatible, Plugin, PluginDeclaration, PluginRegistrar, RUSTC_VERSION,
 };
+use std::path::Path;
+use crate::plugins::manifest;
 use anyhow::{Context, Result};
 use libloading::{Library, Symbol};
 use std::collections::HashMap;
@@ -32,8 +33,9 @@ impl PluginManager {
     /// The caller must ensure the plugin at `path` is a valid StarForge plugin
     /// compiled with a compatible Rust toolchain and ABI.
     pub unsafe fn load_plugin<P: AsRef<OsStr>>(&mut self, path: P) -> Result<()> {
-        let path_display = path.as_ref().to_string_lossy().to_string();
-        let library = Rc::new(Library::new(path).context("Failed to load library")?);
+        let path_ref = path.as_ref();
+        let path_display = path_ref.to_string_lossy().to_string();
+        let library = Rc::new(Library::new(path_ref).context("Failed to load library")?);
 
         let decl: Symbol<*mut PluginDeclaration> = library
             .get(b"PLUGIN_DECLARATION")
@@ -56,17 +58,20 @@ impl PluginManager {
 
         // ── StarForge core version check ─────────────────────────────────────
         if !is_core_version_compatible(decl.core_version) {
-            anyhow::bail!(
-                "Plugin version incompatibility in '{path_display}':\n  \
-                 Plugin was built for StarForge {plugin_core}\n  \
-                 Running StarForge {core}\n\n  \
-                 The major version must match. Rebuild the plugin against \
-                 StarForge {core} or install a compatible StarForge version.\n  \
-                 See DEVELOPER_GUIDE.md § \"Plugin Version Compatibility\" for details.",
-                path_display = path_display,
-                plugin_core = decl.core_version,
-                core = CORE_VERSION,
-            );
+            anyhow::bail!(manifest::format_binary_incompatibility(
+                decl.core_version,
+                &path_display
+            ));
+        }
+
+        // ── Manifest compatibility (if present beside the library) ───────────
+        if let Ok(Some(mf)) = manifest::load_manifest_for_library(Path::new(path_ref)) {
+            mf.validate().with_context(|| {
+                format!(
+                    "Plugin manifest compatibility check failed for '{}'",
+                    path_display
+                )
+            })?;
         }
 
         let mut registrar = ProxyRegistrar::new();

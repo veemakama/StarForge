@@ -340,6 +340,101 @@ fn registry_path() -> Result<PathBuf> {
     Ok(dir.join("registry.json"))
 }
 
+/// Returns true if the path looks like a supported template archive.
+pub fn is_archive_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+/// Extract a `.zip` template package into `dest`, guarding against zip-slip paths.
+pub fn extract_zip_archive(archive: &Path, dest: &Path) -> Result<()> {
+    use zip::ZipArchive;
+
+    if !dest.exists() {
+        fs::create_dir_all(dest)?;
+    }
+
+    let file = fs::File::open(archive)
+        .with_context(|| format!("Failed to open archive {}", archive.display()))?;
+    let mut archive = ZipArchive::new(file)
+        .with_context(|| format!("Failed to read ZIP archive {}", archive.display()))?;
+
+    let dest_canon = dest
+        .canonicalize()
+        .unwrap_or_else(|_| dest.to_path_buf());
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let entry_path = match entry.enclosed_name() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+
+        let out_path = dest_canon.join(&entry_path);
+        if !out_path.starts_with(&dest_canon) {
+            anyhow::bail!(
+                "Archive entry '{}' escapes the destination directory (zip-slip)",
+                entry_path.display()
+            );
+        }
+
+        if entry.name().ends_with('/') {
+            fs::create_dir_all(&out_path)?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut outfile = fs::File::create(&out_path)?;
+            std::io::copy(&mut entry, &mut outfile)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// If `path` is a single top-level directory, return that directory; otherwise `path`.
+pub fn normalize_template_root(path: &Path) -> Result<PathBuf> {
+    if !path.is_dir() {
+        return Ok(path.to_path_buf());
+    }
+    let mut entries = fs::read_dir(path)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            name != ".git" && name != "__MACOSX" && !name.to_string_lossy().starts_with('.')
+        })
+        .collect::<Vec<_>>();
+
+    entries.retain(|e| {
+        let n = e.file_name();
+        n != ".DS_Store"
+    });
+
+    if entries.len() == 1 && entries[0].path().is_dir() {
+        return Ok(entries[0].path());
+    }
+    Ok(path.to_path_buf())
+}
+
+/// Resolve a template path: directories are used as-is; ZIP archives are extracted to a temp dir.
+pub fn resolve_template_source(path: &Path) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
+    if is_archive_path(path) {
+        let temp = tempfile::tempdir().context("Failed to create temp dir for archive extraction")?;
+        extract_zip_archive(path, temp.path())?;
+        let root = normalize_template_root(temp.path())?;
+        Ok((root, Some(temp)))
+    } else if path.is_dir() {
+        Ok((path.to_path_buf(), None))
+    } else {
+        anyhow::bail!(
+            "Template path must be a directory or .zip archive: {}",
+            path.display()
+        );
+    }
+}
+
 fn template_storage_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
     let dir = home.join(".starforge").join("templates").join("storage");
@@ -852,8 +947,30 @@ pub fn publish_template(
     )
 }
 
-/// Like `publish_template` but also records optional CLI version constraints and metadata links.
-#[allow(clippy::too_many_arguments)]
+/// Like `publish_template` but also records optional CLI version constraints.
+/// Install a template from a directory or `.zip` archive into the local registry.
+pub fn install_template_package(
+    package_path: &Path,
+    name: String,
+    description: String,
+    author: String,
+    tags: Vec<String>,
+    version: String,
+    cli_version_min: Option<String>,
+    cli_version_max: Option<String>,
+) -> Result<()> {
+    publish_template_versioned(
+        package_path,
+        name,
+        description,
+        author,
+        tags,
+        version,
+        cli_version_min,
+        cli_version_max,
+    )
+}
+
 pub fn publish_template_versioned(
     template_path: &Path,
     name: String,
@@ -872,15 +989,9 @@ pub fn publish_template_versioned(
         anyhow::bail!("Template path does not exist: {}", template_path.display());
     }
 
-    validate_template_structure_with_constraints(
-        template_path,
-        &name,
-        &description,
-        &author,
-        &version,
-        cli_version_min.as_deref(),
-        cli_version_max.as_deref(),
-    )?;
+    let (source_root, _temp_guard) = resolve_template_source(template_path)?;
+
+    validate_template_structure(&source_root, &name, &description, &author, &version)?;
 
     let dest = template_storage_dir()?.join(&name);
 
@@ -891,7 +1002,7 @@ pub fn publish_template_versioned(
         );
     }
 
-    copy_dir_recursive(template_path, &dest)?;
+    copy_dir_recursive(&source_root, &dest)?;
 
     let entry = TemplateEntry {
         name: name.clone(),
@@ -909,7 +1020,7 @@ pub fn publish_template_versioned(
         updated_at: String::new(),
         cli_version_min,
         cli_version_max,
-        documented: template_path.join("README.md").exists(),
+        documented: source_root.join("README.md").exists(),
         maintenance: MaintenanceStatus::Active,
         license,
         repository,
@@ -1099,6 +1210,60 @@ mod tests {
         .unwrap();
         fs::write(dir.join("src/lib.rs"), "#![no_std]\n").unwrap();
         fs::write(dir.join("README.md"), "# Template\n").unwrap();
+    }
+
+    #[test]
+    fn extract_zip_archive_and_validate() {
+        use zip::write::FileOptions;
+        use zip::ZipWriter;
+
+        let tmp = tempdir().unwrap();
+        let tpl_dir = tmp.path().join("inner");
+        make_valid_template(&tpl_dir);
+
+        let zip_path = tmp.path().join("package.zip");
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = FileOptions::default();
+
+        for entry in walkdir_flat(&tpl_dir) {
+            let rel = entry.strip_prefix(&tpl_dir).unwrap();
+            let name = rel.to_string_lossy().replace('\\', "/");
+            if entry.is_dir() {
+                zip.add_directory(format!("{}/", name), options)
+                    .unwrap();
+            } else {
+                zip.start_file(name, options).unwrap();
+                let mut f = fs::File::open(entry).unwrap();
+                std::io::copy(&mut f, &mut zip).unwrap();
+            }
+        }
+        zip.finish().unwrap();
+
+        let extract_dir = tmp.path().join("out");
+        extract_zip_archive(&zip_path, &extract_dir).unwrap();
+        let root = normalize_template_root(&extract_dir).unwrap();
+        assert!(
+            validate_template_structure(&root, "zip-tpl", "desc", "author", "1.0.0").is_ok()
+        );
+    }
+
+    fn walkdir_flat(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            if d.is_dir() {
+                for entry in fs::read_dir(&d).unwrap() {
+                    let p = entry.unwrap().path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
     }
 
     #[test]

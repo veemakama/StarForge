@@ -1,5 +1,6 @@
 use crate::plugins::interface::CORE_VERSION;
-use crate::plugins::registry::{self, TrustLevel};
+use crate::plugins::manifest;
+use crate::plugins::registry::{self, TrustLevel, UninstallOptions};
 use crate::plugins::PluginManager;
 use crate::utils::print as p;
 use anyhow::{Context, Result};
@@ -35,6 +36,12 @@ pub enum PluginCommands {
     Uninstall {
         /// Plugin name to remove
         name: String,
+        /// Also delete the plugin library file from disk (only under ~/.starforge/plugins/)
+        #[arg(long)]
+        purge: bool,
+        /// Skip confirmation for destructive removal
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Verify trust and compatibility of installed plugins
     Verify {
@@ -68,7 +75,7 @@ pub fn handle(cmd: PluginCommands) -> Result<()> {
         } => install(name, path, source, force),
         PluginCommands::List => list(),
         PluginCommands::Load => load(),
-        PluginCommands::Uninstall { name } => uninstall(name),
+        PluginCommands::Uninstall { name, purge, yes } => uninstall(name, purge, yes),
         PluginCommands::Verify { name } => verify(name),
         PluginCommands::Update { name, yes } => update(name, yes),
     }
@@ -96,12 +103,22 @@ fn install(name: String, path: Option<PathBuf>, source: Option<String>, force: b
         anyhow::bail!("Refusing to install plugin from untrusted source without --force");
     }
 
-    registry::install_plugin(&name, &lib_path, source_str)?;
+    let plugin_manifest = manifest::require_compatible_manifest(&lib_path, &name)?;
+
+    registry::install_plugin(
+        &name,
+        &lib_path,
+        source_str,
+        &plugin_manifest.starforge_version,
+        &plugin_manifest.version,
+    )?;
 
     p::header("Plugin Install");
     p::success("Plugin registered");
     p::kv_accent("Name", &name);
     p::kv("Library", &lib_path.display().to_string());
+    p::kv("Plugin version", &plugin_manifest.version);
+    p::kv("StarForge compatibility", &plugin_manifest.starforge_version);
     p::kv("Trust", trust.label());
     if !source_str.is_empty() {
         p::kv("Source", source_str);
@@ -126,6 +143,9 @@ fn list() -> Result<()> {
         p::kv("Trust", pl.trust.label());
         if !pl.source.is_empty() {
             p::kv("Source", &pl.source);
+        }
+        if !pl.starforge_version.is_empty() {
+            p::kv("StarForge", &pl.starforge_version);
         }
         if i < reg.plugins.len() - 1 {
             println!();
@@ -180,24 +200,69 @@ fn load() -> Result<()> {
     Ok(())
 }
 
-fn uninstall(name: String) -> Result<()> {
-    let mut reg = registry::load_registry().unwrap_or_default();
+fn uninstall(name: String, purge: bool, yes: bool) -> Result<()> {
+    let reg = registry::load_registry().unwrap_or_default();
+    let plugin = reg
+        .plugins
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Plugin '{}' is not installed. Run `starforge plugin list` to see installed plugins.",
+                name
+            )
+        })?;
 
-    let before = reg.plugins.len();
-    reg.plugins.retain(|p| p.name != name);
-
-    if reg.plugins.len() == before {
-        anyhow::bail!(
-            "Plugin '{}' is not installed. Run `starforge plugin list` to see installed plugins.",
-            name
-        );
-    }
-
-    registry::save_registry(&reg)?;
+    let lib_path = PathBuf::from(&plugin.path);
+    let lib_exists = lib_path.exists();
 
     p::header("Plugin Uninstall");
+    p::kv_accent("Plugin", &name);
+    p::kv("Library", &plugin.path);
+
+    if lib_exists {
+        p::warn(
+            "If this plugin is loaded in another StarForge session, close that session before purging files.",
+        );
+    } else {
+        p::warn("Plugin library file is already missing on disk.");
+    }
+
+    if purge && !yes {
+        p::warn("This will permanently delete the plugin library file.");
+        p::info("Proceed with: starforge plugin uninstall <name> --purge --yes");
+        anyhow::bail!("Refusing destructive uninstall without --yes");
+    }
+
+    // Best-effort: load plugin to run on_unload before registry removal
+    if lib_exists {
+        let mut pm = PluginManager::new();
+        if let Err(e) = unsafe { pm.load_plugin(&lib_path) } {
+            p::warn(&format!(
+                "Could not load plugin for clean shutdown: {}. Proceeding with uninstall.",
+                e
+            ));
+        } else {
+            p::info("Plugin unloaded cleanly.");
+        }
+    }
+
+    let opts = UninstallOptions {
+        purge_files: purge,
+        assume_yes: yes,
+    };
+    let report = registry::uninstall_plugin(&name, &opts)?;
+
     p::success(&format!("Plugin '{}' removed from registry", name));
-    p::info("The plugin library file on disk was not deleted.");
+    if report.files_removed {
+        p::success("Plugin library file deleted.");
+    } else if !purge {
+        p::info("Library file kept on disk. Use --purge --yes to delete it.");
+    }
+    if report.library_was_missing && !report.files_removed {
+        p::info("No library file was present to remove.");
+    }
+
     Ok(())
 }
 
@@ -404,17 +469,29 @@ fn verify(name: Option<String>) -> Result<()> {
             TrustLevel::Unknown => false,
         };
 
-        let status = if lib_exists && trust_ok {
+        let compat_ok = if pl.starforge_version.is_empty() {
+            true
+        } else {
+            crate::plugins::interface::is_core_version_compatible(&pl.starforge_version)
+        };
+
+        let status = if lib_exists && trust_ok && compat_ok {
             "✓ OK"
         } else if !lib_exists {
             all_ok = false;
             "✗ library missing"
+        } else if !compat_ok {
+            all_ok = false;
+            "✗ incompatible"
         } else {
             all_ok = false;
             "⚠ untrusted source"
         };
 
         println!("  {:<24} [{}]  trust={}", pl.name, status, pl.trust.label());
+        if !pl.starforge_version.is_empty() {
+            p::kv("StarForge", &pl.starforge_version);
+        }
         if !pl.source.is_empty() {
             p::kv("Source", &pl.source);
         }
@@ -425,6 +502,13 @@ fn verify(name: Option<String>) -> Result<()> {
         if pl.trust == TrustLevel::Unknown && !pl.source.is_empty() {
             p::warn("Source is not in the trusted sources list.");
             p::info("See: starforge plugin install --help for trusted source prefixes.");
+        }
+        if !compat_ok && !pl.starforge_version.is_empty() {
+            p::warn(&format!(
+                "Plugin targets StarForge {} but running {}",
+                pl.starforge_version, CORE_VERSION
+            ));
+            p::info("Reinstall a compatible build or upgrade StarForge.");
         }
     }
 
