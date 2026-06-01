@@ -518,3 +518,215 @@ fn sign_transaction_xdr(transaction_xdr: &str, secret_key: &str, network: &str) 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(signed_mock))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::config::{self, Config, NetworkConfig};
+    use mockito::{Matcher, Server};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    struct TestConfigGuard {
+        _temp_dir: TempDir,
+        original_home: Option<String>,
+    }
+
+    impl TestConfigGuard {
+        fn new(horizon_url: &str, friendbot_url: Option<String>) -> Self {
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let original_home = std::env::var("HOME").ok();
+
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+            }
+
+            let mut networks = HashMap::new();
+            networks.insert(
+                "mocknet".to_string(),
+                NetworkConfig {
+                    horizon_url: horizon_url.to_string(),
+                    soroban_rpc_url: None,
+                    friendbot_url,
+                    passphrase: Some("Test SDF Network ; September 2015".to_string()),
+                },
+            );
+
+            config::save(&Config {
+                network: "mocknet".to_string(),
+                version: "1".to_string(),
+                networks,
+                wallets: HashMap::new(),
+                identities: HashMap::new(),
+                default_identity: None,
+            })
+            .expect("save config");
+
+            Self {
+                _temp_dir: temp_dir,
+                original_home,
+            }
+        }
+    }
+
+    impl Drop for TestConfigGuard {
+        fn drop(&mut self) {
+            if let Some(home) = &self.original_home {
+                unsafe {
+                    std::env::set_var("HOME", home);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var("HOME");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fetch_account_returns_mocked_account() {
+        let mut server = Server::new();
+        let _guard = TestConfigGuard::new(&server.url(), None);
+        let public_key = "GACCOUNT123";
+
+        let _mock = server
+            .mock("GET", format!("/accounts/{public_key}").as_str())
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "id":"GACCOUNT123",
+                    "sequence":"123456789",
+                    "balances":[{"balance":"42.0000000","asset_type":"native","asset_code":null}],
+                    "subentry_count":1
+                }"#,
+            )
+            .create();
+
+        let account = fetch_account(public_key, "mocknet").expect("account");
+        assert_eq!(account.sequence, "123456789");
+        assert_eq!(account.balances.len(), 1);
+        assert_eq!(account.balances[0].asset_type, "native");
+    }
+
+    #[test]
+    fn fetch_account_reports_parse_error_for_invalid_json() {
+        let mut server = Server::new();
+        let _guard = TestConfigGuard::new(&server.url(), None);
+
+        let _mock = server
+            .mock("GET", "/accounts/GACCOUNT123")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("{\"sequence\":")
+            .create();
+
+        let err = fetch_account("GACCOUNT123", "mocknet").unwrap_err();
+        assert!(err.to_string().contains("Failed to parse account response"));
+    }
+
+    #[test]
+    fn fund_account_reports_friendbot_error_path() {
+        let mut server = Server::new();
+        let _guard = TestConfigGuard::new(&server.url(), Some(server.url()));
+
+        let _mock = server
+            .mock("GET", "/")
+            .match_query(Matcher::UrlEncoded("addr".into(), "GACCOUNT123".into()))
+            .with_status(500)
+            .create();
+
+        let err = fund_account("GACCOUNT123", "mocknet").unwrap_err();
+        assert!(err.to_string().contains("Friendbot returned status 500"));
+    }
+
+    #[test]
+    fn build_transaction_query_url_includes_pagination_params() {
+        let mut server = Server::new();
+        let _guard = TestConfigGuard::new(&server.url(), None);
+
+        let filter = TxFilter {
+            limit: 250,
+            cursor: Some("cursor-123".to_string()),
+            order: Some("asc".to_string()),
+            type_filter: Some("payment".to_string()),
+            after: None,
+            before: None,
+            successful_only: None,
+        };
+
+        let url = build_transaction_query_url("GACCOUNT123", "mocknet", &filter).expect("url");
+        assert!(url.contains("/accounts/GACCOUNT123/transactions?order=asc&limit=200"));
+        assert!(url.contains("&cursor=cursor-123"));
+        assert!(url.contains("&type=payment"));
+    }
+
+    #[test]
+    fn fetch_transactions_filtered_uses_cursor_and_filters_records() {
+        let mut server = Server::new();
+        let _guard = TestConfigGuard::new(&server.url(), None);
+
+        let _mock = server
+            .mock("GET", "/accounts/GACCOUNT123/transactions")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("order".into(), "asc".into()),
+                Matcher::UrlEncoded("limit".into(), "2".into()),
+                Matcher::UrlEncoded("cursor".into(), "cursor-2".into()),
+                Matcher::UrlEncoded("type".into(), "payment".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                    "_embedded": {
+                        "records": [
+                            {
+                                "hash":"tx-1",
+                                "successful":true,
+                                "operation_count":1,
+                                "fee_charged":"100",
+                                "created_at":"2024-01-01T00:00:00Z",
+                                "memo_type":"text",
+                                "memo":"ok",
+                                "source_account":"GACCOUNT123",
+                                "type":"payment",
+                                "paging_token":"cursor-1"
+                            },
+                            {
+                                "hash":"tx-2",
+                                "successful":false,
+                                "operation_count":1,
+                                "fee_charged":"100",
+                                "created_at":"2024-01-02T00:00:00Z",
+                                "memo_type":null,
+                                "memo":null,
+                                "source_account":"GACCOUNT123",
+                                "type":"payment",
+                                "paging_token":"cursor-2"
+                            }
+                        ]
+                    }
+                }"#,
+            )
+            .create();
+
+        let records = fetch_transactions_filtered(
+            "GACCOUNT123",
+            "mocknet",
+            TxFilter {
+                limit: 2,
+                cursor: Some("cursor-2".to_string()),
+                order: Some("asc".to_string()),
+                type_filter: Some("payment".to_string()),
+                after: None,
+                before: None,
+                successful_only: Some(true),
+            },
+        )
+        .expect("records");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].hash, "tx-1");
+        assert_eq!(records[0].paging_token.as_deref(), Some("cursor-1"));
+    }
+}
