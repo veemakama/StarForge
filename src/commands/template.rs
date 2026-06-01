@@ -184,6 +184,10 @@ fn install(
         version,
         cli_version_min,
         cli_version_max,
+        None,
+        None,
+        None,
+        None,
     )?;
     p::header("Template Install");
     p::info("Template package installed into the local registry.");
