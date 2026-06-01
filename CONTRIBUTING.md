@@ -288,9 +288,25 @@ Then open a Pull Request on GitHub. Use the provided template and follow the che
 
 ---
 
-## Code Quality
+## Code Quality and Security Logging
 
 StarForge enforces consistent code quality through automated CI checks. See [CI_ENFORCEMENT.md](CI_ENFORCEMENT.md) for full details.
+
+### Security Logging Requirements
+
+All security-relevant operations must be properly logged for auditability and debugging. See [SECURITY_LOGGING_GUIDE.md](SECURITY_LOGGING_GUIDE.md) for detailed requirements. Key principles:
+
+- **Log all security operations** - Wallet creation, encryption, deployment, plugin loading, etc.
+- **Never log secrets** - Private keys, passphrases, encryption keys must be redacted
+- **Include context** - Operation type, outcome, timestamp, and relevant details
+- **Use structured logging** - JSON format for machine parsing and aggregation
+- **Verify in tests** - Security logging behavior should be tested
+
+Before submitting a PR with security-relevant changes:
+1. Check [SECURITY_LOGGING_GUIDE.md](SECURITY_LOGGING_GUIDE.md) for what should be logged
+2. Review [SECURITY_LOGGING_BEST_PRACTICES.md](SECURITY_LOGGING_BEST_PRACTICES.md) for implementation patterns
+3. Ensure logs don't contain secrets or sensitive data
+4. Test that logs provide useful audit trail information
 
 ### Formatting
 
