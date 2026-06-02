@@ -284,26 +284,29 @@ impl TemplateEntry {
         score.clamp(0, 100) as u8
     }
 
-    /// Human-readable trust/quality badges suitable for display to users.
+    /// Compact trust/quality badge strings for inline display in list/search output.
+    ///
+    /// Returns short tokens like `[VERIFIED]`, `[DOCS]`, `[ACTIVE]`, `[DEPRECATED]`,
+    /// `[POPULAR]` that can be joined and appended to a single summary line.
     pub fn trust_indicators(&self) -> Vec<String> {
         let mut badges = Vec::new();
 
         if self.verified {
-            badges.push("✓ Verified".to_string());
+            badges.push("[VERIFIED]".to_string());
         }
         if self.documented {
-            badges.push("📖 Documented".to_string());
+            badges.push("[DOCS]".to_string());
         }
 
         match self.maintenance {
-            MaintenanceStatus::Active => badges.push("🟢 Actively maintained".to_string()),
-            MaintenanceStatus::Maintained => badges.push("🟡 Maintained".to_string()),
-            MaintenanceStatus::Deprecated => badges.push("⚠ Deprecated".to_string()),
+            MaintenanceStatus::Active => badges.push("[ACTIVE]".to_string()),
+            MaintenanceStatus::Maintained => badges.push("[MAINTAINED]".to_string()),
+            MaintenanceStatus::Deprecated => badges.push("[DEPRECATED]".to_string()),
             MaintenanceStatus::Unknown => {}
         }
 
         if self.downloads >= 1000 {
-            badges.push(format!("★ Popular ({} downloads)", self.downloads));
+            badges.push("[POPULAR]".to_string());
         }
 
         badges

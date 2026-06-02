@@ -318,36 +318,22 @@ fn list() -> Result<()> {
     }
 
     for (i, template) in registry.templates.iter().enumerate() {
-        let compat = match check_template_compatibility(template) {
-            CompatibilityStatus::Compatible => "✓".to_string(),
-            CompatibilityStatus::TooOld { required_min, .. } => {
-                format!("✗ requires >= {}", required_min)
+        let compat_badge = match check_template_compatibility(template) {
+            CompatibilityStatus::Compatible => "[COMPATIBLE]",
+            CompatibilityStatus::TooOld { .. } | CompatibilityStatus::TooNew { .. } => {
+                "[INCOMPATIBLE]"
             }
-            CompatibilityStatus::TooNew { required_max, .. } => {
-                format!("✗ requires <= {}", required_max)
-            }
-            CompatibilityStatus::MalformedMetadata { .. } => "⚠ bad metadata".to_string(),
+            CompatibilityStatus::MalformedMetadata { .. } => "[BAD-META]",
         };
+        let mut badges = template.trust_indicators();
+        badges.push(compat_badge.to_string());
         println!(
-            "  {:>2}. {}@{}  [{}]",
-            i + 1,
-            template.name,
-            template.version,
-            compat
-        );
-        let badges = template.trust_indicators();
-        let badge_suffix = if badges.is_empty() {
-            String::new()
-        } else {
-            format!("  {}", badges.join("  "))
-        };
-        println!(
-            "  {:>2}. {}@{}  [quality {}/100]{}",
+            "  {:>2}. {}@{}  [quality {}/100]  {}",
             i + 1,
             template.name,
             template.version,
             template.quality_score(),
-            badge_suffix
+            badges.join(" "),
         );
         p::kv("Description", &template.description);
         p::kv("Source", &template.source.to_string());
@@ -372,6 +358,7 @@ fn search(
     min_quality: u8,
     refresh: bool,
 ) -> Result<()> {
+    use crate::utils::templates::{check_template_compatibility, CompatibilityStatus};
     let tag_list: Vec<String> = tags
         .unwrap_or_default()
         .split(',')
@@ -427,23 +414,25 @@ fn search(
 
     for (i, result) in results.iter().enumerate() {
         let template = &result.entry;
-        let badges = template.trust_indicators();
-        let badge_suffix = if badges.is_empty() {
-            String::new()
-        } else {
-            format!("  {}", badges.join("  "))
+        let compat_badge = match check_template_compatibility(template) {
+            CompatibilityStatus::Compatible => "[COMPATIBLE]",
+            CompatibilityStatus::TooOld { .. } | CompatibilityStatus::TooNew { .. } => {
+                "[INCOMPATIBLE]"
+            }
+            CompatibilityStatus::MalformedMetadata { .. } => "[BAD-META]",
         };
+        let mut badges = template.trust_indicators();
+        badges.push(compat_badge.to_string());
         println!(
-            "  {:>2}. {}@{}  [quality {}/100]{}",
+            "  {:>2}. {}@{}  [quality {}/100]  {}",
             i + 1,
             template.name,
             template.version,
             template.quality_score(),
-            badge_suffix
+            badges.join(" "),
         );
         p::kv("Description", &template.description);
         p::kv("Downloads", &template.downloads.to_string());
-        p::kv("Maintenance", template.maintenance.label());
         if !template.tags.is_empty() {
             p::kv("Tags", &template.tags.join(", "));
         }
