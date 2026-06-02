@@ -108,18 +108,12 @@ pub struct TemplateEntry {
     /// Declared maintenance state of the template.
     #[serde(default)]
     pub maintenance: MaintenanceStatus,
-    /// SPDX license identifier or license name (e.g. "MIT", "Apache-2.0").
+    /// SPDX license identifier (e.g. "MIT", "Apache-2.0"). `None` if not declared.
     #[serde(default)]
     pub license: Option<String>,
-    /// Source repository URL (e.g. "https://github.com/org/repo").
+    /// URL of the template's source repository (e.g. GitHub link).
     #[serde(default)]
-    pub repository: Option<String>,
-    /// Project homepage URL.
-    #[serde(default)]
-    pub homepage: Option<String>,
-    /// Link to extended documentation (separate from the README).
-    #[serde(default)]
-    pub documentation: Option<String>,
+    pub repository_url: Option<String>,
 }
 
 /// Outcome of a template-vs-CLI compatibility check.
@@ -1026,10 +1020,8 @@ pub fn publish_template_versioned(
         cli_version_max,
         documented: source_root.join("README.md").exists(),
         maintenance: MaintenanceStatus::Active,
-        license,
-        repository,
-        homepage,
-        documentation,
+        license: None,
+        repository_url: None,
     };
 
     add_template(entry)?;
@@ -1171,6 +1163,253 @@ pub fn validate_template_structure_with_constraints(
     Ok(())
 }
 
+/// Determine how to fetch a template from a user-supplied source string,
+/// then register it in the local registry and return the new entry.
+///
+/// Source resolution order:
+/// 1. Starts with `https://`, `http://`, `git://`, or ends with `.git` → git URL
+/// 2. Path exists on disk, or starts with `/`, `./`, or `../` → local path
+/// 3. Anything else → treated as a registry template name (marketplace lookup)
+pub fn install_template(
+    source: &str,
+    name_override: Option<&str>,
+    version: Option<&str>,
+    force: bool,
+) -> Result<TemplateEntry> {
+    if source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("git://")
+        || source.ends_with(".git")
+    {
+        return install_from_git_url(source, name_override, force);
+    }
+
+    let path = Path::new(source);
+    if path.exists()
+        || source.starts_with('/')
+        || source.starts_with("./")
+        || source.starts_with("../")
+    {
+        return install_from_local_path(path, name_override, force);
+    }
+
+    install_from_registry(source, version, force)
+}
+
+fn install_from_git_url(
+    url: &str,
+    name_override: Option<&str>,
+    force: bool,
+) -> Result<TemplateEntry> {
+    let name = name_override.map(str::to_string).unwrap_or_else(|| {
+        url.trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("template")
+            .trim_end_matches(".git")
+            .to_string()
+    });
+
+    let mut registry = load_registry()?;
+    if registry.templates.iter().any(|t| t.name == name) && !force {
+        anyhow::bail!(
+            "Template '{}' is already installed. Use --force to overwrite.",
+            name
+        );
+    }
+
+    let dest = template_storage_dir()?.join(&name);
+    if dest.exists() {
+        fs::remove_dir_all(&dest).with_context(|| {
+            format!(
+                "Failed to remove existing template directory {}",
+                dest.display()
+            )
+        })?;
+    }
+
+    fetch_git_template(url, None, &dest)?;
+
+    let entry = TemplateEntry {
+        name: name.clone(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        source: TemplateSource::Git {
+            url: url.to_string(),
+            branch: None,
+        },
+        tags: vec![],
+        path: Some(dest.to_string_lossy().to_string()),
+        author: String::new(),
+        downloads: 0,
+        verified: false,
+        created_at: String::new(),
+        updated_at: String::new(),
+        cli_version_min: None,
+        cli_version_max: None,
+        documented: dest.join("README.md").exists(),
+        maintenance: MaintenanceStatus::Unknown,
+        license: None,
+        repository_url: Some(url.to_string()),
+    };
+
+    registry.templates.retain(|t| t.name != name);
+    registry.templates.push(entry.clone());
+    save_registry(&registry)?;
+
+    Ok(entry)
+}
+
+fn install_from_local_path(
+    path: &Path,
+    name_override: Option<&str>,
+    force: bool,
+) -> Result<TemplateEntry> {
+    if !path.exists() {
+        anyhow::bail!("Local path does not exist: {}", path.display());
+    }
+
+    let name = name_override.map(str::to_string).unwrap_or_else(|| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("template")
+            .to_string()
+    });
+
+    let mut registry = load_registry()?;
+    if registry.templates.iter().any(|t| t.name == name) && !force {
+        anyhow::bail!(
+            "Template '{}' is already installed. Use --force to overwrite.",
+            name
+        );
+    }
+
+    let dest = template_storage_dir()?.join(&name);
+    if dest.exists() {
+        fs::remove_dir_all(&dest).with_context(|| {
+            format!(
+                "Failed to remove existing template directory {}",
+                dest.display()
+            )
+        })?;
+    }
+
+    fetch_local_template(path, &dest)?;
+
+    let entry = TemplateEntry {
+        name: name.clone(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        source: TemplateSource::Local {
+            path: dest.to_string_lossy().to_string(),
+        },
+        tags: vec![],
+        path: Some(dest.to_string_lossy().to_string()),
+        author: String::new(),
+        downloads: 0,
+        verified: false,
+        created_at: String::new(),
+        updated_at: String::new(),
+        cli_version_min: None,
+        cli_version_max: None,
+        documented: dest.join("README.md").exists(),
+        maintenance: MaintenanceStatus::Unknown,
+        license: None,
+        repository_url: None,
+    };
+
+    registry.templates.retain(|t| t.name != name);
+    registry.templates.push(entry.clone());
+    save_registry(&registry)?;
+
+    Ok(entry)
+}
+
+fn install_from_registry(name: &str, version: Option<&str>, force: bool) -> Result<TemplateEntry> {
+    let entry = get_template_by_name_and_version(name, version)?;
+    assert_template_compatible(&entry)?;
+
+    let dest = template_storage_dir()?.join(&entry.name);
+    if dest.exists() {
+        if !force {
+            anyhow::bail!(
+                "Template '{}' is already cached locally. Use --force to re-download.",
+                entry.name
+            );
+        }
+        fs::remove_dir_all(&dest)
+            .with_context(|| format!("Failed to remove cached template at {}", dest.display()))?;
+    }
+
+    match &entry.source {
+        TemplateSource::Git { url, branch } => fetch_git_template(url, branch.as_deref(), &dest)?,
+        TemplateSource::Local { path: src_path } => {
+            fetch_local_template(Path::new(src_path), &dest)?
+        }
+        TemplateSource::Builtin { id } => fetch_builtin_template(id, &dest)?,
+    }
+
+    Ok(entry)
+}
+
+/// Re-fetch a git-sourced template into its local storage directory, updating
+/// it in place. Only git-sourced templates support this operation.
+pub fn update_installed_template(name: &str) -> Result<()> {
+    let entry = get_template(name)?;
+
+    match &entry.source {
+        TemplateSource::Git { url, branch } => {
+            let dest = if let Some(ref p) = entry.path {
+                PathBuf::from(p)
+            } else {
+                template_storage_dir()?.join(name)
+            };
+
+            if dest.exists() {
+                fs::remove_dir_all(&dest).with_context(|| {
+                    format!("Failed to remove existing template at {}", dest.display())
+                })?;
+            }
+
+            fetch_git_template(url, branch.as_deref(), &dest)?;
+
+            let mut registry = load_registry()?;
+            if let Some(t) = registry.templates.iter_mut().find(|t| t.name == name) {
+                t.path = Some(dest.to_string_lossy().to_string());
+                t.updated_at = String::new();
+            }
+            save_registry(&registry)?;
+
+            Ok(())
+        }
+        other => anyhow::bail!(
+            "Template '{}' uses source '{}' which does not support updates. \
+             Only git-sourced templates can be updated.",
+            name,
+            other
+        ),
+    }
+}
+
+/// Update all git-sourced templates. Returns a list of (name, result) pairs.
+pub fn update_all_installed_templates() -> Result<Vec<(String, Result<()>)>> {
+    let registry = load_registry()?;
+    let git_names: Vec<String> = registry
+        .templates
+        .iter()
+        .filter(|t| matches!(t.source, TemplateSource::Git { .. }))
+        .map(|t| t.name.clone())
+        .collect();
+
+    Ok(git_names
+        .into_iter()
+        .map(|name| {
+            let result = update_installed_template(&name);
+            (name, result)
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1196,9 +1435,7 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository: None,
-            homepage: None,
-            documentation: None,
+            repository_url: None,
         }
     }
 
@@ -1429,10 +1666,8 @@ mod tests {
             cli_version_max: None,
             documented: true,
             maintenance: MaintenanceStatus::Active,
-            license: Some("MIT".to_string()),
-            repository: Some("https://github.com/example/uniswap-v2".to_string()),
-            homepage: None,
-            documentation: None,
+            license: None,
+            repository_url: None,
         });
 
         // Test name search
@@ -1479,9 +1714,7 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository: None,
-            homepage: None,
-            documentation: None,
+            repository_url: None,
         };
 
         let dest = tmp.path().join(&entry.name);
@@ -1530,9 +1763,7 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository: None,
-            homepage: None,
-            documentation: None,
+            repository_url: None,
         }
     }
 

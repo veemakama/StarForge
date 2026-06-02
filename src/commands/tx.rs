@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use colored::*;
 
+use crate::utils::confirmation;
 use crate::utils::horizon::FeeStats;
 use crate::utils::{config, crypto, horizon, print as p, tx_batch}; // Import FeeStats
 
@@ -189,19 +190,48 @@ fn handle_batch(args: BatchArgs) -> Result<()> {
         ),
     );
 
-    if !args.yes {
-        println!();
-        print!("  Proceed with batch transaction? [y/N] ");
-        use std::io::BufRead;
-        let line = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .unwrap_or(Ok(String::new()))?;
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-            p::info("Batch transaction cancelled.");
-            return Ok(());
-        }
+    // Build operation summary for confirmation
+    let risk_level = if args.network == "mainnet" {
+        confirmation::RiskLevel::High
+    } else {
+        confirmation::RiskLevel::Medium
+    };
+
+    let mut summary = confirmation::OperationSummary::new(
+        "Batch Stellar Transaction".to_string(),
+        args.network.clone(),
+        risk_level,
+    )
+    .add("From Wallet", &wallet.name)
+    .add("From Address", &wallet.public_key)
+    .add("Operations", &doc.operations.len().to_string())
+    .add("Batch File", &args.file.display().to_string())
+    .add("Estimated Fee", &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0));
+
+    // Add operation details to summary
+    for (i, op) in payment_ops.iter().enumerate() {
+        let asset_label = match (&op.asset_code, &op.asset_issuer) {
+            (None, None) => "XLM".to_string(),
+            (Some(code), Some(issuer)) => format!("{}:{}", code, issuer),
+            _ => "unknown".to_string(),
+        };
+        summary = summary.add(
+            &format!("Op {}", i + 1),
+            &format!("payment → {} {} {}", op.destination, op.amount, asset_label),
+        );
+    }
+
+    let confirm_config = confirmation::ConfirmationConfig {
+        risk_level,
+        network: args.network.clone(),
+        skip_confirm: args.yes,
+        dry_run: false,
+        prompt: Some("Proceed with batch transaction?".to_string()),
+        require_type_confirmation: args.network == "mainnet",
+    };
+
+    if !confirmation::confirm_operation(&summary, &confirm_config)? {
+        return Ok(());
     }
 
     println!();
@@ -380,20 +410,35 @@ fn handle_send(args: SendArgs) -> Result<()> {
         &format!("{}...", &tx_result.transaction_xdr[..20]),
     );
 
-    // Confirmation prompt
-    if !args.yes {
-        println!();
-        print!("  Proceed with payment? [y/N] ");
-        use std::io::BufRead;
-        let line = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .unwrap_or(Ok(String::new()))?;
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-            p::info("Payment cancelled.");
-            return Ok(());
-        }
+    // Build operation summary for confirmation
+    let risk_level = if args.network == "mainnet" {
+        confirmation::RiskLevel::High
+    } else {
+        confirmation::RiskLevel::Medium
+    };
+
+    let summary = confirmation::OperationSummary::new(
+        "Send Stellar Payment".to_string(),
+        args.network.clone(),
+        risk_level,
+    )
+    .add("From Wallet", &wallet.name)
+    .add("From Address", &wallet.public_key)
+    .add("To Address", &args.to)
+    .add("Amount", &format!("{} {}", args.amount, args.asset))
+    .add("Estimated Fee", &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0));
+
+    let confirm_config = confirmation::ConfirmationConfig {
+        risk_level,
+        network: args.network.clone(),
+        skip_confirm: args.yes,
+        dry_run: false,
+        prompt: Some("Proceed with payment?".to_string()),
+        require_type_confirmation: args.network == "mainnet",
+    };
+
+    if !confirmation::confirm_operation(&summary, &confirm_config)? {
+        return Ok(());
     }
 
     // Submit transaction

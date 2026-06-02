@@ -1,5 +1,7 @@
 pub mod benchmark;
+pub mod command_tree;
 pub mod completions;
+pub mod config;
 pub mod contract;
 pub mod deploy;
 pub mod gas;
@@ -13,9 +15,11 @@ pub mod new;
 pub mod node;
 pub mod plugin;
 pub mod shell;
+pub mod telemetry;
 pub mod template;
 pub mod test;
 pub mod tutorial;
 pub mod tx;
 pub mod upgrade;
 pub mod wallet;
+

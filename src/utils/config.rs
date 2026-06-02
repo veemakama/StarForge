@@ -221,6 +221,10 @@ pub struct WalletRotationRecord {
     pub previous_public_key: String,
     pub previous_network: String,
     pub previous_funded: bool,
+    /// The previous secret key (plaintext or encrypted bundle), preserved when
+    /// `--backup` is passed to `wallet rotate`.  `None` when not requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_secret_key: Option<String>,
 }
 
 impl Default for Config {
@@ -352,6 +356,10 @@ pub fn get_data_dir() -> Result<PathBuf> {
         fs::create_dir_all(&dir)?;
     }
     Ok(dir)
+}
+
+pub fn get_config_path() -> Result<PathBuf> {
+    Ok(config_path())
 }
 
 pub fn config_path() -> PathBuf {

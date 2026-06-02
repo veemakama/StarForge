@@ -1,9 +1,27 @@
 use std::any::Any;
 
+/// A command (or subcommand) that a plugin exposes to the StarForge CLI.
+#[derive(Debug, Clone)]
+pub struct PluginCommand {
+    /// The command name users type, e.g. `"defi"` or `"defi swap"`.
+    pub name: String,
+    /// One-line description shown in help and completions.
+    pub description: String,
+}
+
 pub trait Plugin: Any + Send + Sync {
     fn name(&self) -> &'static str;
     fn version(&self) -> &'static str;
     fn description(&self) -> &'static str;
+
+    /// Commands this plugin registers.  Defaults to a single top-level command
+    /// named after the plugin itself so existing plugins need no changes.
+    fn commands(&self) -> Vec<PluginCommand> {
+        vec![PluginCommand {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+        }]
+    }
 
     fn on_load(&self) {}
     fn on_unload(&self) {}

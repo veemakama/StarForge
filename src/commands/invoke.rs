@@ -1,4 +1,4 @@
-use crate::utils::{config, print as p, soroban};
+use crate::utils::{config, confirmation, print as p, soroban};
 use anyhow::Result;
 use clap::Args;
 
@@ -31,6 +31,10 @@ pub struct InvokeArgs {
     /// Simulate only (don't submit transaction)
     #[arg(long)]
     simulate: bool,
+
+    /// Skip confirmation prompt
+    #[arg(long, default_value = "false")]
+    yes: bool,
 }
 
 #[allow(dead_code)]
@@ -111,6 +115,47 @@ pub fn handle(args: InvokeArgs) -> Result<()> {
         p::info(&format!("Events ({})", outcome.simulation.events.len()));
         for (i, event) in outcome.simulation.events.iter().enumerate() {
             p::kv(&format!("  [{}]", i), event);
+        }
+    }
+
+    // Add confirmation before actual submission
+    if !args.simulate {
+        let risk_level = if *network == "mainnet" {
+            confirmation::RiskLevel::High
+        } else {
+            confirmation::RiskLevel::Medium
+        };
+
+        let mut summary = confirmation::OperationSummary::new(
+            "Invoke Contract Function".to_string(),
+            network.clone(),
+            risk_level,
+        )
+        .add("Contract ID", &args.contract_id)
+        .add("Function", &args.function)
+        .add("Wallet", &args.wallet)
+        .add("Estimated Fee", &format!("{} stroops", outcome.simulation.fee))
+        .add("Return Value", &outcome.simulation.return_value);
+
+        // Add arguments to summary if present
+        if !arg_list.is_empty() {
+            for (i, (arg, arg_type)) in arg_list.iter().zip(arg_type_list.iter()).enumerate() {
+                summary = summary.add(&format!("Arg [{}] {}", i, arg_type), arg);
+            }
+        }
+
+        let confirm_config = confirmation::ConfirmationConfig {
+            risk_level,
+            network: network.clone(),
+            skip_confirm: args.yes,
+            dry_run: false,
+            prompt: Some("Submit this transaction?".to_string()),
+            require_type_confirmation: *network == "mainnet",
+        };
+
+        if !confirmation::confirm_operation(&summary, &confirm_config)? {
+            p::info("Transaction submission cancelled.");
+            return Ok(());
         }
     }
 

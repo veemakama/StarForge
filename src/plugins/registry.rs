@@ -75,6 +75,16 @@ pub struct InstalledPlugin {
     /// Plugin version from manifest.
     #[serde(default)]
     pub plugin_version: String,
+    /// Commands registered by this plugin (name → description).
+    #[serde(default)]
+    pub commands: Vec<RegisteredCommand>,
+}
+
+/// A command entry persisted in the registry so it is visible without loading the .so.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredCommand {
+    pub name: String,
+    pub description: String,
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -146,20 +156,20 @@ pub fn is_managed_plugin_path(path: &Path) -> bool {
 ///
 /// `source` is the URL or identifier where the plugin came from; pass an
 /// empty string when the user supplied `--path` directly.
+/// `commands` is the list of commands the plugin advertises (from `Plugin::commands()`).
 pub fn install_plugin(
     name: &str,
     library_path: &Path,
     source: &str,
     starforge_version: &str,
     plugin_version: &str,
+    commands: Vec<RegisteredCommand>,
 ) -> Result<()> {
     if !library_path.exists() {
         anyhow::bail!("Plugin library not found: {}", library_path.display());
     }
 
     let trust = classify_source(source);
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
     let mut reg = load_registry().unwrap_or_default();
     reg.plugins.retain(|p| p.name != name);
     reg.plugins.push(InstalledPlugin {
@@ -169,10 +179,21 @@ pub fn install_plugin(
         trust,
         starforge_version: starforge_version.to_string(),
         plugin_version: plugin_version.to_string(),
+        commands,
     });
     reg.plugins.sort_by(|a, b| a.name.cmp(&b.name));
     save_registry(&reg)?;
     Ok(())
+}
+
+/// Return all commands registered across all installed plugins (read from registry, no .so load).
+pub fn load_all_registered_commands() -> Vec<RegisteredCommand> {
+    load_registry()
+        .unwrap_or_default()
+        .plugins
+        .into_iter()
+        .flat_map(|p| p.commands)
+        .collect()
 }
 
 /// Remove a plugin from the registry and optionally delete its library file.
@@ -350,7 +371,7 @@ mod tests {
     fn install_missing_library_fails() {
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("nonexistent.so");
-        let result = install_plugin("test", &missing, "", "0.1.0", "1.0.0");
+        let result = install_plugin("test", &missing, "", "0.1.0", "1.0.0", vec![]);
         assert!(result.is_err(), "installing a missing library must fail");
         assert!(result.unwrap_err().to_string().contains("not found"));
     }

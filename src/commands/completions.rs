@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use std::io;
+use std::io::{self, Write};
 
 /// Shell to generate completions for
 #[derive(Subcommand)]
@@ -15,14 +15,63 @@ pub enum CompletionShell {
 }
 
 pub fn handle(shell: CompletionShell) -> Result<()> {
-    let mut cmd = Cli::command();
     let shell = match shell {
         CompletionShell::Bash => Shell::Bash,
         CompletionShell::Zsh => Shell::Zsh,
         CompletionShell::Fish => Shell::Fish,
     };
-    generate(shell, &mut cmd, "starforge", &mut io::stdout());
+    let mut buf = Vec::new();
+    generate_completion(shell, &mut buf);
+
+    // Append plugin command completions so they are visible in tab completion.
+    let plugin_cmds = crate::plugins::registry::load_all_registered_commands();
+    if !plugin_cmds.is_empty() {
+        append_plugin_completions(shell, &plugin_cmds, &mut buf);
+    }
+
+    io::stdout().write_all(&buf)?;
     Ok(())
+}
+
+fn append_plugin_completions(
+    shell: Shell,
+    cmds: &[crate::plugins::registry::RegisteredCommand],
+    buf: &mut Vec<u8>,
+) {
+    use std::io::Write;
+    match shell {
+        Shell::Fish => {
+            for cmd in cmds {
+                let _ = writeln!(
+                    buf,
+                    "complete -c starforge -n '__fish_use_subcommand starforge' -f -a '{}' -d '{}'",
+                    cmd.name,
+                    cmd.description.replace('\'', "\\'")
+                );
+            }
+        }
+        Shell::Bash => {
+            // Inject plugin names into the top-level subcommand list.
+            let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+            let _ = writeln!(
+                buf,
+                "\n# Plugin commands\n_starforge_plugin_cmds='{}'\n",
+                names.join(" ")
+            );
+        }
+        Shell::Zsh => {
+            let _ = writeln!(buf, "\n# Plugin commands");
+            for cmd in cmds {
+                let _ = writeln!(
+                    buf,
+                    "# plugin: {} -- {}",
+                    cmd.name,
+                    cmd.description.replace('\'', "\\'")
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Generate completion script to a writer instead of stdout (used in tests).

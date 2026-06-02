@@ -1,4 +1,4 @@
-use crate::utils::{config, horizon, optimizer, print as p, soroban};
+use crate::utils::{config, confirmation, horizon, optimizer, print as p, soroban};
 use anyhow::Result;
 use clap::Args;
 use colored::*;
@@ -335,23 +335,37 @@ pub fn handle(args: DeployArgs) -> Result<()> {
         p::separator();
     }
 
-    if args.network == "mainnet" {
-        p::warn("You are deploying to MAINNET. This costs real XLM.");
-    }
+    // Build operation summary for confirmation
+    let risk_level = if args.network == "mainnet" {
+        confirmation::RiskLevel::High
+    } else {
+        confirmation::RiskLevel::Medium
+    };
 
-    if !args.yes {
-        println!();
-        print!("  Proceed? [y/N] ");
-        use std::io::BufRead;
-        let line = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .unwrap_or(Ok(String::new()))?;
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-            p::info("Deployment cancelled.");
-            return Ok(());
-        }
+    let summary = confirmation::OperationSummary::new(
+        "Deploy Soroban Contract".to_string(),
+        args.network.clone(),
+        risk_level,
+    )
+    .add("WASM file", &wasm_path.display().to_string())
+    .add("WASM size", &format!("{:.1} KB", wasm_size_kb))
+    .add("WASM hash", &wasm_hash)
+    .add("Wallet", &wallet.name)
+    .add("Public Key", &wallet.public_key)
+    .add("Optimized", if args.optimize { "Yes" } else { "No" })
+    .add("Execute", if args.execute { "Yes" } else { "No (dry-run)" });
+
+    let confirm_config = confirmation::ConfirmationConfig {
+        risk_level,
+        network: args.network.clone(),
+        skip_confirm: args.yes,
+        dry_run: !args.execute,
+        prompt: Some("Proceed with deployment?".to_string()),
+        require_type_confirmation: args.network == "mainnet",
+    };
+
+    if !confirmation::confirm_operation(&summary, &confirm_config)? {
+        return Ok(());
     }
 
     println!();

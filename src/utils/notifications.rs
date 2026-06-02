@@ -1,4 +1,5 @@
 use colored::*;
+#[allow(unused_imports)]
 use std::process::Command;
 
 pub fn info(message: &str) {
@@ -25,9 +26,11 @@ pub fn alert(message: &str) {
     try_system_notification(message);
 }
 
-fn try_system_notification(message: &str) {
+fn try_system_notification(_message: &str) {
+    #[allow(unused_variables)]
+    let msg = _message;
     #[cfg(target_os = "macos")]
-    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
 
     #[cfg(target_os = "macos")]
     {
@@ -41,7 +44,7 @@ fn try_system_notification(message: &str) {
     #[cfg(target_os = "linux")]
     {
         let _ = Command::new("notify-send")
-            .args(["StarForge", message])
+            .args(["StarForge", msg])
             .status();
     }
 }

@@ -101,6 +101,34 @@ pub enum TemplateCommands {
     },
     /// Initialize the template registry with example templates
     Init,
+    /// Show full metadata for a template: author, version, license, repository, trust badges
+    Info {
+        /// Template name
+        name: String,
+    },
+    /// Install a template from a Git URL, local path, or marketplace registry name
+    Install {
+        /// Source: git URL (https://...), local filesystem path, or registry template name
+        source: String,
+        /// Override the installed template name (defaults to the template name or URL basename)
+        #[arg(long)]
+        name: Option<String>,
+        /// Pin to a specific version when installing from the marketplace registry
+        #[arg(long)]
+        version: Option<String>,
+        /// Overwrite the template if it is already installed
+        #[arg(long, default_value = "false")]
+        force: bool,
+    },
+    /// Update installed templates to their latest versions
+    Update {
+        /// Name of the template to update (omit when using --all)
+        #[arg(long, conflicts_with = "all")]
+        name: Option<String>,
+        /// Update all installed git-sourced templates
+        #[arg(long, short, conflicts_with = "name")]
+        all: bool,
+    },
 }
 
 pub fn handle(cmd: TemplateCommands) -> Result<()> {
@@ -162,6 +190,14 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
         TemplateCommands::Show { name } => show(name),
         TemplateCommands::Remove { name } => remove(name),
         TemplateCommands::Init => init(),
+        TemplateCommands::Info { name } => info(name),
+        TemplateCommands::Install {
+            source,
+            name,
+            version,
+            force,
+        } => install(source, name, version, force),
+        TemplateCommands::Update { name, all } => update(name, all),
     }
 }
 
@@ -522,5 +558,177 @@ fn remove(name: String) -> Result<()> {
 
 fn init() -> Result<()> {
     p::info("Template registry is ready. Use `starforge template list` to view templates.");
+    Ok(())
+}
+
+fn info(name: String) -> Result<()> {
+    use crate::utils::templates::{check_template_compatibility, CompatibilityStatus};
+
+    let template = templates::get_template(&name)?;
+
+    p::header(&format!("Template Info: {}", template.name));
+    p::separator();
+
+    p::kv_accent("Name", &template.name);
+    p::kv("Version", &template.version);
+
+    if !template.author.is_empty() {
+        p::kv("Author", &template.author);
+    }
+    if !template.description.is_empty() {
+        p::kv("Description", &template.description);
+    }
+    if !template.tags.is_empty() {
+        p::kv("Tags", &template.tags.join(", "));
+    }
+
+    println!();
+    p::info("Source & Repository");
+    p::kv("Source", &template.source.to_string());
+    if let Some(ref repo) = template.repository_url {
+        p::kv("Repository", repo);
+    }
+
+    println!();
+    p::info("Licensing & Compatibility");
+    if let Some(ref license) = template.license {
+        p::kv("License", license);
+    } else {
+        p::kv("License", "Not declared");
+    }
+    match (
+        template.cli_version_min.as_deref(),
+        template.cli_version_max.as_deref(),
+    ) {
+        (Some(min), Some(max)) => p::kv("CLI Version Range", &format!(">= {}  <=  {}", min, max)),
+        (Some(min), None) => p::kv("CLI Version Range", &format!(">= {}", min)),
+        (None, Some(max)) => p::kv("CLI Version Range", &format!("<= {}", max)),
+        (None, None) => p::kv("CLI Version Range", "Any version"),
+    }
+    match check_template_compatibility(&template) {
+        CompatibilityStatus::Compatible => p::success("Compatible with this StarForge version"),
+        CompatibilityStatus::TooOld {
+            required_min,
+            running,
+        } => p::warn(&format!(
+            "Incompatible: requires >= {} (running {})",
+            required_min, running
+        )),
+        CompatibilityStatus::TooNew {
+            required_max,
+            running,
+        } => p::warn(&format!(
+            "Incompatible: requires <= {} (running {})",
+            required_max, running
+        )),
+        CompatibilityStatus::MalformedMetadata { reason } => {
+            p::warn(&format!("Malformed version metadata: {}", reason))
+        }
+    }
+
+    println!();
+    p::info("Quality & Trust");
+    p::kv(
+        "Quality Score",
+        &format!("{}/100", template.quality_score()),
+    );
+    p::kv("Maintenance", template.maintenance.label());
+    p::kv(
+        "Documentation",
+        if template.documented {
+            "Available"
+        } else {
+            "Not provided"
+        },
+    );
+    p::kv("Downloads", &template.downloads.to_string());
+
+    let badges = template.trust_indicators();
+    if !badges.is_empty() {
+        p::kv("Trust Badges", &badges.join("  "));
+    }
+
+    if !template.created_at.is_empty() {
+        println!();
+        p::info("Timestamps");
+        p::kv("Published", &template.created_at);
+        if !template.updated_at.is_empty() {
+            p::kv("Last Updated", &template.updated_at);
+        }
+    }
+
+    p::separator();
+    Ok(())
+}
+
+fn install(
+    source: String,
+    name: Option<String>,
+    version: Option<String>,
+    force: bool,
+) -> Result<()> {
+    p::header("Template Install");
+    p::kv("Source", &source);
+    if let Some(ref n) = name {
+        p::kv("Name override", n);
+    }
+    if let Some(ref v) = version {
+        p::kv("Version", v);
+    }
+    println!();
+
+    p::step(1, 2, "Resolving and fetching template...");
+    let entry = templates::install_template(&source, name.as_deref(), version.as_deref(), force)?;
+
+    p::step(2, 2, "Registering in local registry...");
+    println!();
+    p::success(&format!("Template '{}' installed", entry.name));
+    p::kv_accent("Name", &entry.name);
+    p::kv("Version", &entry.version);
+    p::kv("Source", &entry.source.to_string());
+    if let Some(ref path) = entry.path {
+        p::kv("Local path", path);
+    }
+    p::info(&format!(
+        "Use it with: starforge template info {}",
+        entry.name
+    ));
+    Ok(())
+}
+
+fn update(name: Option<String>, all: bool) -> Result<()> {
+    if all {
+        p::header("Template Update — All");
+        p::step(1, 1, "Updating all git-sourced templates...");
+        let results = templates::update_all_installed_templates()?;
+
+        if results.is_empty() {
+            p::info("No git-sourced templates are installed.");
+            return Ok(());
+        }
+
+        println!();
+        for (tpl_name, result) in &results {
+            match result {
+                Ok(()) => p::success(&format!("  {} updated", tpl_name)),
+                Err(e) => p::warn(&format!("  {} — {}", tpl_name, e)),
+            }
+        }
+
+        let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
+        println!();
+        p::kv("Updated", &format!("{}/{}", ok, results.len()));
+        return Ok(());
+    }
+
+    let name = name.ok_or_else(|| {
+        anyhow::anyhow!("Provide a template name or --all to update all templates")
+    })?;
+
+    p::header(&format!("Template Update: {}", name));
+    p::step(1, 1, "Re-fetching from source...");
+    templates::update_installed_template(&name)?;
+    println!();
+    p::success(&format!("Template '{}' updated", name));
     Ok(())
 }

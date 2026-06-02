@@ -1,4 +1,4 @@
-use crate::utils::{config, horizon, print as p};
+use crate::utils::{config, confirmation, horizon, print as p};
 use anyhow::Result;
 use chrono::Utc;
 use clap::{Args, Subcommand};
@@ -554,23 +554,36 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
     p::kv("Network", &proposal.network);
     p::kv("Executor", &wallet.public_key);
 
-    if args.network == "mainnet" {
-        p::warn("You are upgrading on MAINNET. This is irreversible without a rollback proposal.");
-    }
+    // Build operation summary for confirmation
+    let risk_level = if args.network == "mainnet" {
+        confirmation::RiskLevel::High
+    } else {
+        confirmation::RiskLevel::Medium
+    };
 
-    if !args.yes {
-        println!();
-        print!("  Execute upgrade? [y/N] ");
-        use std::io::BufRead;
-        let line = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .unwrap_or(Ok(String::new()))?;
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-            p::info("Upgrade cancelled.");
-            return Ok(());
-        }
+    let summary = confirmation::OperationSummary::new(
+        "Execute Contract Upgrade".to_string(),
+        args.network.clone(),
+        risk_level,
+    )
+    .add("Proposal ID", &proposal.id)
+    .add("Contract ID", &proposal.contract_id)
+    .add("New WASM hash", &proposal.new_wasm_hash)
+    .add("Network", &proposal.network)
+    .add("Executor", &wallet.public_key)
+    .add("Approvals", &format!("{}/{}", proposal.approvals.len(), proposal.threshold));
+
+    let confirm_config = confirmation::ConfirmationConfig {
+        risk_level,
+        network: args.network.clone(),
+        skip_confirm: args.yes,
+        dry_run: false,
+        prompt: Some("Execute this upgrade?".to_string()),
+        require_type_confirmation: args.network == "mainnet",
+    };
+
+    if !confirmation::confirm_operation(&summary, &confirm_config)? {
+        return Ok(());
     }
 
     println!();
@@ -651,23 +664,35 @@ fn handle_rollback(args: RollbackArgs) -> Result<()> {
     p::kv("Originally from", &target.proposal_id);
     p::kv("Network", &args.network);
 
-    if args.network == "mainnet" {
-        p::warn("Rolling back on MAINNET. Ensure backward compatibility before proceeding.");
-    }
+    // Build operation summary for confirmation
+    let risk_level = if args.network == "mainnet" {
+        confirmation::RiskLevel::High
+    } else {
+        confirmation::RiskLevel::Medium
+    };
 
-    if !args.yes {
-        println!();
-        print!("  Proceed with rollback? [y/N] ");
-        use std::io::BufRead;
-        let line = std::io::stdin()
-            .lock()
-            .lines()
-            .next()
-            .unwrap_or(Ok(String::new()))?;
-        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-            p::info("Rollback cancelled.");
-            return Ok(());
-        }
+    let summary = confirmation::OperationSummary::new(
+        "Contract Rollback".to_string(),
+        args.network.clone(),
+        risk_level,
+    )
+    .add("Contract ID", &args.contract_id)
+    .add("Rollback to", &args.to_hash)
+    .add("Originally from", &target.proposal_id)
+    .add("Network", &args.network)
+    .add("Executor", &wallet.public_key);
+
+    let confirm_config = confirmation::ConfirmationConfig {
+        risk_level,
+        network: args.network.clone(),
+        skip_confirm: args.yes,
+        dry_run: false,
+        prompt: Some("Proceed with rollback?".to_string()),
+        require_type_confirmation: args.network == "mainnet",
+    };
+
+    if !confirmation::confirm_operation(&summary, &confirm_config)? {
+        return Ok(());
     }
 
     println!();

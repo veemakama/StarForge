@@ -219,7 +219,33 @@ fn scaffold_contract(
 
     p::header(&format!("Scaffolding Soroban contract: {}", name));
     println!("  Template: {}\n", template.cyan());
-
+    // Ensure selected template is compatible with current CLI version
+    let entry = templates::get_template(&template)?;
+    match templates::check_template_compatibility(&entry) {
+        templates::CompatibilityStatus::Compatible => {}
+        templates::CompatibilityStatus::TooOld { required_min, running } => {
+            p::error(&format!(
+                "Template '{}' requires StarForge >= {} but you are running {}.\nPlease upgrade StarForge: https://github.com/Nanle-code/StarForge#installation",
+                entry.name, required_min, running
+            ));
+            return Ok(());
+        }
+        templates::CompatibilityStatus::TooNew { required_max, running } => {
+            p::error(&format!(
+                "Template '{}' only supports StarForge <= {} but you are running {}.\nUse an older StarForge version or choose a compatible template.",
+                entry.name, required_max, running
+            ));
+            return Ok(());
+        }
+        templates::CompatibilityStatus::MalformedMetadata { reason } => {
+            p::error(&format!(
+                "Template '{}' has malformed version metadata: {}.\nContact the template author to fix the cli_version_min / cli_version_max fields.",
+                entry.name, reason
+            ));
+            return Ok(());
+        }
+    }
+    
     // Roll back the partially-created directory if any step below fails.
     let mut target_guard = PathCleanup::new(dir.to_path_buf());
 

@@ -1,5 +1,6 @@
 pub mod bindings;
 pub mod config;
+pub mod confirmation;
 pub mod crypto;
 pub mod hardware_wallet;
 pub mod horizon;

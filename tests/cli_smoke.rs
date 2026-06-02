@@ -103,11 +103,12 @@ fn deploy_help_documents_flags() {
 #[test]
 fn network_add_custom_succeeds() {
     let home = isolated_home();
+    let net_name = format!("smoke-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
     let output = starforge(home.path())
         .args([
             "network",
             "add",
-            "my-smoke-test-net",
+            &net_name,
             "--horizon-url",
             "https://example.com/horizon",
             "--soroban-rpc-url",
@@ -125,8 +126,8 @@ fn network_add_custom_succeeds() {
     assert_success(&list_output, "starforge network show");
     let stdout = String::from_utf8_lossy(&list_output.stdout);
     assert!(
-        stdout.to_lowercase().contains("my-smoke-test-net"),
-        "expected 'my-smoke-test-net' in network show output"
+        stdout.to_lowercase().contains(&net_name),
+        "expected unique net_name in network show output"
     );
 }
 
@@ -175,11 +176,12 @@ fn network_switch_unknown_network_fails() {
 #[test]
 fn network_remove_custom_succeeds() {
     let home = isolated_home();
+    let net_name = format!("remove-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
     starforge(home.path())
         .args([
             "network",
             "add",
-            "removable-net",
+            &net_name,
             "--horizon-url",
             "https://example.com/horizon",
         ])
@@ -187,7 +189,7 @@ fn network_remove_custom_succeeds() {
         .expect("spawn network add");
 
     let output = starforge(home.path())
-        .args(["network", "remove", "removable-net"])
+        .args(["network", "remove", &net_name])
         .output()
         .expect("spawn network remove");
     assert_success(&output, "starforge network remove");
@@ -198,7 +200,7 @@ fn network_remove_custom_succeeds() {
         .expect("spawn network show");
     let stdout = String::from_utf8_lossy(&show.stdout);
     assert!(
-        !stdout.to_lowercase().contains("removable-net"),
+        !stdout.to_lowercase().contains(&net_name),
         "removed network should not appear in show output"
     );
 }
@@ -218,11 +220,13 @@ fn network_remove_reserved_fails() {
 #[test]
 fn network_rename_custom_succeeds() {
     let home = isolated_home();
+    let old_name = format!("old-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+    let new_name = format!("new-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() + 1);
     starforge(home.path())
         .args([
             "network",
             "add",
-            "old-net",
+            &old_name,
             "--horizon-url",
             "https://example.com/horizon",
         ])
@@ -230,7 +234,7 @@ fn network_rename_custom_succeeds() {
         .expect("spawn network add");
 
     let output = starforge(home.path())
-        .args(["network", "rename", "old-net", "new-net"])
+        .args(["network", "rename", &old_name, &new_name])
         .output()
         .expect("spawn network rename");
     assert_success(&output, "starforge network rename");
@@ -240,7 +244,7 @@ fn network_rename_custom_succeeds() {
         .output()
         .expect("spawn network show");
     let stdout = String::from_utf8_lossy(&show.stdout);
-    assert!(stdout.to_lowercase().contains("new-net"));
+    assert!(stdout.to_lowercase().contains(&new_name));
 }
 
 #[test]
@@ -267,3 +271,102 @@ fn network_add_reserved_name_fails() {
         stderr
     );
 }
+
+#[test]
+fn config_subcommand_sets_and_shows_telemetry() {
+    let home = isolated_home();
+    
+    // Disable telemetry via config set
+    let output2 = starforge(home.path())
+        .args(["config", "set", "telemetry.enabled", "false"])
+        .output()
+        .expect("spawn config set");
+    assert_success(&output2, "starforge config set telemetry.enabled false");
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(stdout2.contains("set to 'false'"));
+
+    // Check again: telemetry should show false
+    let output3 = starforge(home.path())
+        .args(["config", "show"])
+        .output()
+        .expect("spawn config show");
+    assert_success(&output3, "starforge config show");
+    let stdout3 = String::from_utf8_lossy(&output3.stdout);
+    assert!(stdout3.contains("telemetry.enabled"));
+    assert!(stdout3.contains("false"));
+
+    // Enable telemetry via config set
+    let output4 = starforge(home.path())
+        .args(["config", "set", "telemetry.enabled", "true"])
+        .output()
+        .expect("spawn config set");
+    assert_success(&output4, "starforge config set telemetry.enabled true");
+    let stdout4 = String::from_utf8_lossy(&output4.stdout);
+    assert!(stdout4.contains("set to 'true'"));
+
+    // Check again: telemetry should show true
+    let output5 = starforge(home.path())
+        .args(["config", "show"])
+        .output()
+        .expect("spawn config show");
+    assert_success(&output5, "starforge config show");
+    let stdout5 = String::from_utf8_lossy(&output5.stdout);
+    assert!(stdout5.contains("telemetry.enabled"));
+    assert!(stdout5.contains("true"));
+}
+
+#[test]
+fn telemetry_subcommand_toggles_status() {
+    let home = isolated_home();
+
+    // Disable telemetry
+    let output2 = starforge(home.path())
+        .args(["telemetry", "disable"])
+        .output()
+        .expect("spawn telemetry disable");
+    assert_success(&output2, "starforge telemetry disable");
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(stdout2.contains("disabled"));
+
+    // Check disabled status
+    let output3 = starforge(home.path())
+        .args(["telemetry", "status"])
+        .output()
+        .expect("spawn telemetry status");
+    assert_success(&output3, "starforge telemetry status");
+    let stdout3 = String::from_utf8_lossy(&output3.stdout);
+    assert!(stdout3.contains("false"));
+
+    // Enable telemetry
+    let output4 = starforge(home.path())
+        .args(["telemetry", "enable"])
+        .output()
+        .expect("spawn telemetry enable");
+    assert_success(&output4, "starforge telemetry enable");
+    
+    // Check enabled status
+    let output5 = starforge(home.path())
+        .args(["telemetry", "status"])
+        .output()
+        .expect("spawn telemetry status");
+    assert_success(&output5, "starforge telemetry status");
+    let stdout5 = String::from_utf8_lossy(&output5.stdout);
+    assert!(stdout5.contains("true"));
+}
+
+#[test]
+fn telemetry_respects_env_override() {
+    let home = isolated_home();
+
+    // status with env override False
+    let mut cmd = starforge(home.path());
+    cmd.args(["telemetry", "status"]);
+    cmd.env("STARFORGE_TELEMETRY", "false");
+    let output = cmd.output().expect("spawn telemetry status");
+    assert_success(&output, "starforge telemetry status with env override");
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Environment Override"));
+    assert!(stdout.contains("false"));
+}
+

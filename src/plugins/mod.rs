@@ -4,4 +4,4 @@ pub mod manifest;
 pub mod registry;
 
 pub use interface::{Plugin, PluginDeclaration};
-pub use loader::PluginManager;
+pub use loader::{PluginLoadError, PluginManager};
