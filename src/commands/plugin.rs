@@ -409,13 +409,7 @@ fn update(name: Option<String>, yes: bool) -> Result<()> {
 
             match status {
                 Ok(s) if s.success() => {
-                    registry::install_plugin(
-                        &pl.name,
-                        std::path::Path::new(&pl.path),
-                        &pl.source,
-                        &pl.starforge_version,
-                        &pl.plugin_version,
-                    )?;
+                    registry::install_plugin(&pl.name, std::path::Path::new(&pl.path), &pl.source, &pl.starforge_version, &pl.plugin_version)?;
                     p::success(&format!("  '{}' updated via cargo install", pl.name));
                     updated += 1;
                 }
@@ -447,7 +441,7 @@ fn update(name: Option<String>, yes: bool) -> Result<()> {
                         })
                         .unwrap_or(0);
 
-                    let installed_epoch = 0;
+                    let installed_epoch = 0u64;
 
                     if modified > installed_epoch {
                         // Library on disk is newer — refresh the registry entry.
