@@ -8,7 +8,7 @@
 )]
 
 mod commands;
-pub mod plugins;
+pub use starforge::plugins;
 mod utils;
 
 use clap::{Parser, Subcommand};

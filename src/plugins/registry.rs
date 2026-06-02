@@ -158,15 +158,7 @@ pub fn install_plugin(
     }
 
     let trust = classify_source(source);
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
     let mut reg = load_registry().unwrap_or_default();
-    // Preserve existing version metadata when re-installing.
-    let existing_version = reg
-        .plugins
-        .iter()
-        .find(|p| p.name == name)
-        .and_then(|p| p.version.clone());
     reg.plugins.retain(|p| p.name != name);
     reg.plugins.push(InstalledPlugin {
         name: name.to_string(),

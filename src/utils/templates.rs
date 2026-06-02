@@ -968,6 +968,10 @@ pub fn install_template_package(
         version,
         cli_version_min,
         cli_version_max,
+        None,
+        None,
+        None,
+        None,
     )
 }
 
