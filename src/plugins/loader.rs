@@ -2,12 +2,12 @@ use crate::plugins::interface::{
     is_core_version_compatible, Plugin, PluginDeclaration, PluginRegistrar, CORE_VERSION,
     RUSTC_VERSION,
 };
-use std::path::Path;
 use crate::plugins::manifest;
 use anyhow::Result;
 use libloading::{Library, Symbol};
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::path::Path;
 use std::rc::Rc;
 
 /// Structured diagnostic for a plugin loading failure.
@@ -18,16 +18,10 @@ use std::rc::Rc;
 pub enum PluginLoadError {
     /// The file could not be opened as a shared library (wrong format, missing
     /// file, OS-level load error, etc.).
-    InvalidLibrary {
-        path: String,
-        detail: String,
-    },
+    InvalidLibrary { path: String, detail: String },
     /// The `PLUGIN_DECLARATION` symbol was absent — the binary is not a
     /// StarForge plugin or was stripped.
-    MissingRequiredSymbol {
-        path: String,
-        symbol: String,
-    },
+    MissingRequiredSymbol { path: String, symbol: String },
     /// The plugin was compiled with a different `rustc` version, making the
     /// Rust ABI incompatible.
     AbiBuildMismatch {
@@ -42,10 +36,7 @@ pub enum PluginLoadError {
         running_core: String,
     },
     /// The `starforge-plugin.toml` manifest failed validation.
-    ManifestIncompatible {
-        path: String,
-        detail: String,
-    },
+    ManifestIncompatible { path: String, detail: String },
 }
 
 impl PluginLoadError {
@@ -155,12 +146,12 @@ impl PluginManager {
 
         // ── Locate the required export symbol ────────────────────────────────
         let decl: Symbol<*mut PluginDeclaration> =
-            library
-                .get(b"PLUGIN_DECLARATION")
-                .map_err(|_| PluginLoadError::MissingRequiredSymbol {
+            library.get(b"PLUGIN_DECLARATION").map_err(|_| {
+                PluginLoadError::MissingRequiredSymbol {
                     path: path_display.clone(),
                     symbol: "PLUGIN_DECLARATION".to_string(),
-                })?;
+                }
+            })?;
 
         let decl = &**decl;
 
@@ -184,10 +175,11 @@ impl PluginManager {
 
         // ── Manifest compatibility (if present beside the library) ───────────
         if let Ok(Some(mf)) = manifest::load_manifest_for_library(Path::new(path_ref)) {
-            mf.validate().map_err(|e| PluginLoadError::ManifestIncompatible {
-                path: path_display.clone(),
-                detail: e.to_string(),
-            })?;
+            mf.validate()
+                .map_err(|e| PluginLoadError::ManifestIncompatible {
+                    path: path_display.clone(),
+                    detail: e.to_string(),
+                })?;
         }
 
         let mut registrar = ProxyRegistrar::new();

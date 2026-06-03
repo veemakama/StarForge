@@ -112,7 +112,9 @@ fn run_dry_run(
     }
     // Verify the bytes are non-empty and start with the WASM magic header.
     if wasm_bytes.len() < 4 || &wasm_bytes[..4] != b"\0asm" {
-        warnings.push("File does not appear to be a valid WASM binary (missing magic header).".to_string());
+        warnings.push(
+            "File does not appear to be a valid WASM binary (missing magic header).".to_string(),
+        );
     } else {
         checks_passed += 1;
         p::success("        Artifact is a valid WASM binary");
@@ -161,7 +163,10 @@ fn run_dry_run(
     p::info("[ 4/4 ] Estimating Soroban fees via RPC simulation...");
     match soroban::simulate_deploy_transaction(wasm_hash, network, wallet) {
         Ok(simulation) => {
-            p::kv("        Estimated fee", &format!("{} stroops", simulation.fee));
+            p::kv(
+                "        Estimated fee",
+                &format!("{} stroops", simulation.fee),
+            );
             if !simulation.errors.is_empty() {
                 for error in &simulation.errors {
                     warnings.push(format!("RPC simulation warning: {}", error));
@@ -186,7 +191,10 @@ fn run_dry_run(
     // ── Summary ───────────────────────────────────────────────────────────
     p::separator();
     p::header("Deployment Plan Summary");
-    p::kv("Checks passed", &format!("{}/{}", checks_passed, checks_total));
+    p::kv(
+        "Checks passed",
+        &format!("{}/{}", checks_passed, checks_total),
+    );
     p::kv("Network", network);
     p::kv("Wallet", &wallet.name);
     p::kv("WASM", &wasm_path.display().to_string());
@@ -312,7 +320,14 @@ pub fn handle(args: DeployArgs) -> Result<()> {
 
     // --dry-run: validate everything and print deployment plan, then exit.
     if args.dry_run {
-        return run_dry_run(&wasm_path, &wasm_bytes, &wasm_hash, wasm_size_kb, wallet, &args.network);
+        return run_dry_run(
+            &wasm_path,
+            &wasm_bytes,
+            &wasm_hash,
+            wasm_size_kb,
+            wallet,
+            &args.network,
+        );
     }
 
     if args.simulate {

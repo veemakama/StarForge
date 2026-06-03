@@ -206,7 +206,10 @@ fn handle_batch(args: BatchArgs) -> Result<()> {
     .add("From Address", &wallet.public_key)
     .add("Operations", &doc.operations.len().to_string())
     .add("Batch File", &args.file.display().to_string())
-    .add("Estimated Fee", &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0));
+    .add(
+        "Estimated Fee",
+        &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0),
+    );
 
     // Add operation details to summary
     for (i, op) in payment_ops.iter().enumerate() {
@@ -426,7 +429,10 @@ fn handle_send(args: SendArgs) -> Result<()> {
     .add("From Address", &wallet.public_key)
     .add("To Address", &args.to)
     .add("Amount", &format!("{} {}", args.amount, args.asset))
-    .add("Estimated Fee", &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0));
+    .add(
+        "Estimated Fee",
+        &format!("{:.7} XLM", tx_result.fee as f64 / 10_000_000.0),
+    );
 
     let confirm_config = confirmation::ConfirmationConfig {
         risk_level,

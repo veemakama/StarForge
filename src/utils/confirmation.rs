@@ -99,18 +99,18 @@ impl OperationSummary {
     pub fn display(&self) {
         p::header(&self.title);
         p::separator();
-        
+
         // Display risk level
         p::kv("Risk Level", &self.risk_level.display().to_string());
         p::kv("Network", &self.network);
-        
+
         println!();
-        
+
         // Display all items
         for (key, value) in &self.items {
             p::kv(key, value);
         }
-        
+
         p::separator();
     }
 }
@@ -119,10 +119,10 @@ impl OperationSummary {
 pub fn confirm_operation(summary: &OperationSummary, config: &ConfirmationConfig) -> Result<bool> {
     // Display mainnet warning if applicable
     display_mainnet_warning(&config.network);
-    
+
     // Display operation summary
     summary.display();
-    
+
     // If dry-run, show preview message and return true
     if config.dry_run {
         println!();
@@ -130,7 +130,7 @@ pub fn confirm_operation(summary: &OperationSummary, config: &ConfirmationConfig
         println!();
         return Ok(true);
     }
-    
+
     // Skip confirmation if requested
     if config.skip_confirm {
         println!();
@@ -138,23 +138,26 @@ pub fn confirm_operation(summary: &OperationSummary, config: &ConfirmationConfig
         println!();
         return Ok(true);
     }
-    
+
     // Request confirmation
     println!();
-    
-    let prompt = config.prompt.as_deref().unwrap_or("Proceed with this operation?");
-    
+
+    let prompt = config
+        .prompt
+        .as_deref()
+        .unwrap_or("Proceed with this operation?");
+
     if config.require_type_confirmation || summary.risk_level == RiskLevel::High {
         // Require typing "yes" for high-risk operations
         print!("  {} [type 'yes' to confirm]: ", prompt.bright_white());
         std::io::stdout().flush()?;
-        
+
         let line = std::io::stdin()
             .lock()
             .lines()
             .next()
             .unwrap_or(Ok(String::new()))?;
-        
+
         if line.trim().to_lowercase() != "yes" {
             println!();
             p::info("Operation cancelled.");
@@ -164,20 +167,20 @@ pub fn confirm_operation(summary: &OperationSummary, config: &ConfirmationConfig
         // Simple y/N confirmation
         print!("  {} [y/N]: ", prompt.bright_white());
         std::io::stdout().flush()?;
-        
+
         let line = std::io::stdin()
             .lock()
             .lines()
             .next()
             .unwrap_or(Ok(String::new()))?;
-        
+
         if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
             println!();
             p::info("Operation cancelled.");
             return Ok(false);
         }
     }
-    
+
     println!();
     Ok(true)
 }
@@ -189,11 +192,11 @@ pub fn display_preview(summary: &OperationSummary) {
     p::kv("Risk Level", &summary.risk_level.display().to_string());
     p::kv("Network", &summary.network);
     println!();
-    
+
     for (key, value) in &summary.items {
         p::kv(key, value);
     }
-    
+
     p::separator();
     println!();
     p::info("This is a preview. Use --execute to perform this operation.");
@@ -229,10 +232,11 @@ mod tests {
 
     #[test]
     fn test_operation_summary_builder() {
-        let summary = OperationSummary::new("Test".to_string(), "testnet".to_string(), RiskLevel::Low)
-            .add("Key1", "Value1")
-            .add("Key2", "Value2");
-        
+        let summary =
+            OperationSummary::new("Test".to_string(), "testnet".to_string(), RiskLevel::Low)
+                .add("Key1", "Value1")
+                .add("Key2", "Value2");
+
         assert_eq!(summary.items.len(), 2);
         assert_eq!(summary.items[0].0, "Key1");
         assert_eq!(summary.items[1].0, "Key2");

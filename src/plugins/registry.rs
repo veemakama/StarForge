@@ -1,3 +1,4 @@
+use crate::utils::config::{self, Config};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -28,34 +29,168 @@ impl TrustLevel {
     }
 }
 
-/// Prefixes of sources that are automatically given `Trusted` status.
-const TRUSTED_SOURCE_PREFIXES: &[&str] = &[
-    "https://github.com/Nanle-code/starforge-",
-    "https://github.com/StarForge-Labs/",
-    "https://crates.io/crates/starforge-plugin-",
-];
-
-/// Classify a source URL/path into a trust level.
-///
-/// - An empty source (i.e., `--path` was used) → `Local`
-/// - A source matching a known trusted prefix → `Trusted`
-/// - Everything else → `Unknown`
+/// Classify a source URL/path into a trust level using the built-in default
+/// allowlist.
 pub fn classify_source(source: &str) -> TrustLevel {
+    classify_source_with_config(source, &Config::default())
+}
+
+/// Classify a source URL/path into a trust level using the configured
+/// allowlist.
+pub fn classify_source_with_config(source: &str, config: &Config) -> TrustLevel {
     if source.is_empty() {
         return TrustLevel::Local;
     }
-    for prefix in TRUSTED_SOURCE_PREFIXES {
-        if source.starts_with(prefix) {
+    for trusted_source in &config.plugin_trust.trusted_sources {
+        if source_matches_trusted_source(source, trusted_source) {
             return TrustLevel::Trusted;
         }
     }
     TrustLevel::Unknown
 }
 
+pub fn classify_source_from_cli_config(source: &str) -> Result<TrustLevel> {
+    let config = config::load()?;
+    Ok(classify_source_with_config(source, &config))
+}
+
+pub fn source_matches_trusted_source(source: &str, trusted_source: &str) -> bool {
+    let source = source.trim();
+    let trusted_source = trusted_source.trim();
+    if source.is_empty() || trusted_source.is_empty() {
+        return false;
+    }
+
+    if let Some(trusted_url) = ParsedSourceUrl::parse(trusted_source) {
+        let Some(source_url) = ParsedSourceUrl::parse(source) else {
+            return false;
+        };
+        return trusted_url.matches(&source_url);
+    }
+
+    let trusted_domain = trusted_source
+        .strip_prefix("*.")
+        .unwrap_or(trusted_source)
+        .strip_suffix('*')
+        .unwrap_or_else(|| trusted_source.strip_prefix("*.").unwrap_or(trusted_source))
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+
+    if trusted_domain.is_empty() {
+        return false;
+    }
+
+    let Some(source_host) = extract_host(source) else {
+        return false;
+    };
+
+    source_host == trusted_domain || source_host.ends_with(&format!(".{trusted_domain}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedSourceUrl {
+    scheme: String,
+    host: String,
+    path: String,
+    prefix_match: bool,
+}
+
+impl ParsedSourceUrl {
+    fn parse(input: &str) -> Option<Self> {
+        let input = input.trim();
+        let (scheme, rest) = input.split_once("://")?;
+        let scheme = scheme.to_ascii_lowercase();
+        let prefix_match = input.ends_with('*') || input.ends_with('/') || input.ends_with('-');
+        let rest = rest.strip_suffix('*').unwrap_or(rest);
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        let host = authority
+            .rsplit('@')
+            .next()
+            .unwrap_or("")
+            .trim_matches(['[', ']'])
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if host.is_empty() {
+            return None;
+        }
+
+        let raw_path = if authority_end < rest.len() {
+            &rest[authority_end..]
+        } else {
+            "/"
+        };
+        let path_end = raw_path.find(['?', '#']).unwrap_or(raw_path.len());
+        let path = raw_path[..path_end]
+            .strip_suffix('*')
+            .unwrap_or(&raw_path[..path_end]);
+        let path = if path.is_empty() { "/" } else { path }.to_string();
+
+        Some(Self {
+            scheme,
+            host,
+            path,
+            prefix_match,
+        })
+    }
+
+    fn matches(&self, source: &Self) -> bool {
+        if self.scheme != source.scheme || self.host != source.host {
+            return false;
+        }
+        if self.path == "/" {
+            return true;
+        }
+        if self.prefix_match {
+            return source.path.starts_with(&self.path);
+        }
+        source.path == self.path
+    }
+}
+
+fn extract_host(source: &str) -> Option<String> {
+    if let Some(parsed) = ParsedSourceUrl::parse(source) {
+        return Some(parsed.host);
+    }
+
+    let source = source.trim();
+    if source.is_empty() || source.contains(char::is_whitespace) {
+        return None;
+    }
+    let authority = source
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .trim_matches(['[', ']']);
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.contains('.') {
+        Some(host)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginRegistry {
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisteredCommand {
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +213,9 @@ pub struct InstalledPlugin {
     /// RFC3339 timestamp of when the plugin was installed.
     #[serde(default)]
     pub installed_at: Option<String>,
+    /// Commands registered by the plugin at install time.
+    #[serde(default)]
+    pub commands: Vec<RegisteredCommand>,
 }
 
 fn registry_path() -> Result<PathBuf> {
@@ -162,7 +300,9 @@ pub fn install_plugin(
         anyhow::bail!("Plugin library not found: {}", library_path.display());
     }
 
-    let trust = classify_source(source);
+    let trust = classify_source_from_cli_config(source)?;
+    let now = chrono::Utc::now().to_rfc3339();
+
     let mut reg = load_registry().unwrap_or_default();
     reg.plugins.retain(|p| p.name != name);
     reg.plugins.push(InstalledPlugin {
@@ -173,6 +313,7 @@ pub fn install_plugin(
         starforge_version: starforge_version.to_string(),
         plugin_version: plugin_version.to_string(),
         installed_at: Some(now),
+        commands,
     });
     reg.plugins.sort_by(|a, b| a.name.cmp(&b.name));
     save_registry(&reg)?;
@@ -355,6 +496,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn configured_domain_trusts_exact_and_subdomains_only() {
+        let mut cfg = Config::default();
+        cfg.plugin_trust.trusted_sources = vec!["plugins.example.com".to_string()];
+
+        assert_eq!(
+            classify_source_with_config("https://plugins.example.com/releases/foo", &cfg),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            classify_source_with_config("https://cdn.plugins.example.com/foo", &cfg),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            classify_source_with_config("https://plugins.example.com.evil/foo", &cfg),
+            TrustLevel::Unknown
+        );
+    }
+
+    #[test]
+    fn configured_url_prefix_trusts_only_matching_scheme_host_and_path() {
+        let mut cfg = Config::default();
+        cfg.plugin_trust.trusted_sources =
+            vec!["https://plugins.example.com/starforge/".to_string()];
+
+        assert_eq!(
+            classify_source_with_config(
+                "https://plugins.example.com/starforge/plugin.tar.gz",
+                &cfg
+            ),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            classify_source_with_config("http://plugins.example.com/starforge/plugin.tar.gz", &cfg),
+            TrustLevel::Unknown
+        );
+        assert_eq!(
+            classify_source_with_config("https://plugins.example.com/other/plugin.tar.gz", &cfg),
+            TrustLevel::Unknown
+        );
+        assert_eq!(
+            classify_source_with_config("https://plugins.example.com.evil/starforge/plugin", &cfg),
+            TrustLevel::Unknown
+        );
+    }
+
+    #[test]
+    fn empty_config_allowlist_treats_remote_sources_as_unknown() {
+        let mut cfg = Config::default();
+        cfg.plugin_trust.trusted_sources.clear();
+
+        assert_eq!(
+            classify_source_with_config("https://github.com/Nanle-code/starforge-defi", &cfg),
+            TrustLevel::Unknown
+        );
+        assert_eq!(classify_source_with_config("", &cfg), TrustLevel::Local);
+    }
+
     // ── install_plugin ────────────────────────────────────────────────────────
 
     #[test]
@@ -405,6 +604,10 @@ mod tests {
         assert_eq!(
             plugin.source, "",
             "missing source field should default to empty string"
+        );
+        assert!(
+            plugin.commands.is_empty(),
+            "missing commands field should default to an empty list"
         );
     }
 

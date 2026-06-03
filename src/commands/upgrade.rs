@@ -571,7 +571,10 @@ fn handle_execute(args: ExecuteArgs) -> Result<()> {
     .add("New WASM hash", &proposal.new_wasm_hash)
     .add("Network", &proposal.network)
     .add("Executor", &wallet.public_key)
-    .add("Approvals", &format!("{}/{}", proposal.approvals.len(), proposal.threshold));
+    .add(
+        "Approvals",
+        &format!("{}/{}", proposal.approvals.len(), proposal.threshold),
+    );
 
     let confirm_config = confirmation::ConfirmationConfig {
         risk_level,

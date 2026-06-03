@@ -245,6 +245,9 @@ fn rename_network(old_name: String, new_name: String) -> Result<()> {
     config::rename_custom_network(&mut cfg, &old_name, &new_name)?;
     config::save(&cfg)?;
 
-    p::success(&format!("Network renamed from '{}' to '{}'", old_name, new_name));
+    p::success(&format!(
+        "Network renamed from '{}' to '{}'",
+        old_name, new_name
+    ));
     Ok(())
 }

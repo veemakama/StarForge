@@ -113,7 +113,11 @@ pub struct TemplateEntry {
     pub license: Option<String>,
     /// URL of the template's source repository (e.g. GitHub link).
     #[serde(default)]
-    pub repository_url: Option<String>,
+    pub repository: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub documentation: Option<String>,
 }
 
 /// Outcome of a template-vs-CLI compatibility check.
@@ -358,9 +362,7 @@ pub fn extract_zip_archive(archive: &Path, dest: &Path) -> Result<()> {
     let mut archive = ZipArchive::new(file)
         .with_context(|| format!("Failed to read ZIP archive {}", archive.display()))?;
 
-    let dest_canon = dest
-        .canonicalize()
-        .unwrap_or_else(|_| dest.to_path_buf());
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
@@ -418,7 +420,8 @@ pub fn normalize_template_root(path: &Path) -> Result<PathBuf> {
 /// Resolve a template path: directories are used as-is; ZIP archives are extracted to a temp dir.
 pub fn resolve_template_source(path: &Path) -> Result<(PathBuf, Option<tempfile::TempDir>)> {
     if is_archive_path(path) {
-        let temp = tempfile::tempdir().context("Failed to create temp dir for archive extraction")?;
+        let temp =
+            tempfile::tempdir().context("Failed to create temp dir for archive extraction")?;
         extract_zip_archive(path, temp.path())?;
         let root = normalize_template_root(temp.path())?;
         Ok((root, Some(temp)))
@@ -1023,8 +1026,10 @@ pub fn publish_template_versioned(
         cli_version_max,
         documented: source_root.join("README.md").exists(),
         maintenance: MaintenanceStatus::Active,
-        license: None,
-        repository_url: None,
+        license,
+        repository,
+        homepage,
+        documentation,
     };
 
     add_template(entry)?;
@@ -1039,7 +1044,15 @@ pub fn validate_template_structure(
     author: &str,
     version: &str,
 ) -> Result<()> {
-    validate_template_structure_with_constraints(path, name, description, author, version, None, None)
+    validate_template_structure_with_constraints(
+        path,
+        name,
+        description,
+        author,
+        version,
+        None,
+        None,
+    )
 }
 
 /// Full validation including optional CLI version constraint format checks.
@@ -1110,7 +1123,8 @@ pub fn validate_template_structure_with_constraints(
                 anyhow::bail!(
                     "cli_version_min '{}' is greater than cli_version_max '{}'. \
                      Fix the version bounds so that min <= max.",
-                    min, max
+                    min,
+                    max
                 );
             }
         }
@@ -1253,7 +1267,9 @@ fn install_from_git_url(
         documented: dest.join("README.md").exists(),
         maintenance: MaintenanceStatus::Unknown,
         license: None,
-        repository_url: Some(url.to_string()),
+        repository: Some(url.to_string()),
+        homepage: None,
+        documentation: None,
     };
 
     registry.templates.retain(|t| t.name != name);
@@ -1318,7 +1334,9 @@ fn install_from_local_path(
         documented: dest.join("README.md").exists(),
         maintenance: MaintenanceStatus::Unknown,
         license: None,
-        repository_url: None,
+        repository: None,
+        homepage: None,
+        documentation: None,
     };
 
     registry.templates.retain(|t| t.name != name);
@@ -1438,7 +1456,9 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository_url: None,
+            repository: None,
+            homepage: None,
+            documentation: None,
         }
     }
 
@@ -1474,8 +1494,7 @@ mod tests {
             let rel = entry.strip_prefix(&tpl_dir).unwrap();
             let name = rel.to_string_lossy().replace('\\', "/");
             if entry.is_dir() {
-                zip.add_directory(format!("{}/", name), options)
-                    .unwrap();
+                zip.add_directory(format!("{}/", name), options).unwrap();
             } else {
                 zip.start_file(name, options).unwrap();
                 let mut f = fs::File::open(entry).unwrap();
@@ -1487,9 +1506,7 @@ mod tests {
         let extract_dir = tmp.path().join("out");
         extract_zip_archive(&zip_path, &extract_dir).unwrap();
         let root = normalize_template_root(&extract_dir).unwrap();
-        assert!(
-            validate_template_structure(&root, "zip-tpl", "desc", "author", "1.0.0").is_ok()
-        );
+        assert!(validate_template_structure(&root, "zip-tpl", "desc", "author", "1.0.0").is_ok());
     }
 
     fn walkdir_flat(dir: &Path) -> Vec<PathBuf> {
@@ -1602,8 +1619,7 @@ mod tests {
     fn validate_rejects_bad_version_semver() {
         let tmp = tempdir().unwrap();
         make_valid_template(tmp.path());
-        let err =
-            validate_template_structure(tmp.path(), "n", "d", "a", "not-semver").unwrap_err();
+        let err = validate_template_structure(tmp.path(), "n", "d", "a", "not-semver").unwrap_err();
         assert!(err.to_string().contains("semver") || err.to_string().contains("not-semver"));
     }
 
@@ -1670,7 +1686,9 @@ mod tests {
             documented: true,
             maintenance: MaintenanceStatus::Active,
             license: None,
-            repository_url: None,
+            repository: None,
+            homepage: None,
+            documentation: None,
         });
 
         // Test name search
@@ -1717,7 +1735,9 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository_url: None,
+            repository: None,
+            homepage: None,
+            documentation: None,
         };
 
         let dest = tmp.path().join(&entry.name);
@@ -1766,7 +1786,9 @@ mod tests {
             documented: false,
             maintenance: MaintenanceStatus::Unknown,
             license: None,
-            repository_url: None,
+            repository: None,
+            homepage: None,
+            documentation: None,
         }
     }
 
@@ -2015,7 +2037,10 @@ mod tests {
 
     #[test]
     fn parse_semver_rejects_extra_dots() {
-        assert!(parse_semver("1.2.3.4").is_err(), "four components should fail");
+        assert!(
+            parse_semver("1.2.3.4").is_err(),
+            "four components should fail"
+        );
     }
 
     #[test]
@@ -2135,8 +2160,14 @@ mod tests {
         let err = assert_template_compatible(&entry).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains(&min), "error should contain required_min");
-        assert!(msg.contains(CLI_VERSION), "error should contain running version");
-        assert!(msg.contains("future-tpl"), "error should contain template name");
+        assert!(
+            msg.contains(CLI_VERSION),
+            "error should contain running version"
+        );
+        assert!(
+            msg.contains("future-tpl"),
+            "error should contain template name"
+        );
     }
 
     #[test]
@@ -2148,8 +2179,14 @@ mod tests {
             let err = assert_template_compatible(&entry).unwrap_err();
             let msg = err.to_string();
             assert!(msg.contains("0.0.0"), "error should contain required_max");
-            assert!(msg.contains(CLI_VERSION), "error should contain running version");
-            assert!(msg.contains("old-tpl"), "error should contain template name");
+            assert!(
+                msg.contains(CLI_VERSION),
+                "error should contain running version"
+            );
+            assert!(
+                msg.contains("old-tpl"),
+                "error should contain template name"
+            );
         }
     }
 
@@ -2159,7 +2196,10 @@ mod tests {
         entry.cli_version_min = Some("bad-version".to_string());
         let err = assert_template_compatible(&entry).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("broken-tpl"), "error should contain template name");
+        assert!(
+            msg.contains("broken-tpl"),
+            "error should contain template name"
+        );
         assert!(
             msg.contains("malformed") || msg.contains("bad-version"),
             "error should describe the problem"

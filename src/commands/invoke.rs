@@ -134,7 +134,10 @@ pub fn handle(args: InvokeArgs) -> Result<()> {
         .add("Contract ID", &args.contract_id)
         .add("Function", &args.function)
         .add("Wallet", &args.wallet)
-        .add("Estimated Fee", &format!("{} stroops", outcome.simulation.fee))
+        .add(
+            "Estimated Fee",
+            &format!("{} stroops", outcome.simulation.fee),
+        )
         .add("Return Value", &outcome.simulation.return_value);
 
         // Add arguments to summary if present

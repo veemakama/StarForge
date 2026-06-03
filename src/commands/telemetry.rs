@@ -26,7 +26,7 @@ pub fn handle(cmd: TelemetryCommands) -> Result<()> {
             let cfg = config::load()?;
             let enabled = cfg.telemetry_enabled.unwrap_or(true);
             let env_override = std::env::var("STARFORGE_TELEMETRY").ok();
-            
+
             p::header("Telemetry Status");
             p::separator();
             p::kv("Configured Enabled", &enabled.to_string());

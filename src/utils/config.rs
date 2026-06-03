@@ -128,9 +128,9 @@ pub fn validate_secret_key(secret: &str) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("Invalid KDF iteration count: must be a valid u32"))?;
         }
         if parts.len() == 6 {
-            parts[5]
-                .parse::<u32>()
-                .map_err(|_| anyhow::anyhow!("Invalid KDF parallelism factor: must be a valid u32"))?;
+            parts[5].parse::<u32>().map_err(|_| {
+                anyhow::anyhow!("Invalid KDF parallelism factor: must be a valid u32")
+            })?;
         }
 
         return Ok(());
@@ -196,6 +196,8 @@ pub struct Config {
     pub wallets: Vec<WalletEntry>,
     #[serde(default)]
     pub networks: std::collections::HashMap<String, NetworkConfig>,
+    #[serde(default)]
+    pub plugin_trust: PluginTrustConfig,
     pub telemetry_enabled: Option<bool>,
     pub wallet_encryption: Option<crypto::KdfOptions>,
 }
@@ -211,6 +213,126 @@ pub struct NetworkConfig {
     pub friendbot_url: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PluginTrustConfig {
+    /// Trusted plugin source allowlist entries. Entries may be domains
+    /// (`plugins.example.com`) or URL prefixes (`https://plugins.example.com/releases/`).
+    #[serde(default = "default_trusted_plugin_sources")]
+    pub trusted_sources: Vec<String>,
+}
+
+impl Default for PluginTrustConfig {
+    fn default() -> Self {
+        Self {
+            trusted_sources: default_trusted_plugin_sources(),
+        }
+    }
+}
+
+pub fn default_trusted_plugin_sources() -> Vec<String> {
+    vec![
+        "https://github.com/Nanle-code/starforge-*".to_string(),
+        "https://github.com/StarForge-Labs/*".to_string(),
+        "https://crates.io/crates/starforge-plugin-*".to_string(),
+    ]
+}
+
+pub fn validate_plugin_trust_source(source: &str) -> Result<()> {
+    let source = source.trim();
+    if source.is_empty() {
+        anyhow::bail!("Trusted plugin source cannot be empty");
+    }
+    if source.chars().any(char::is_whitespace) {
+        anyhow::bail!("Trusted plugin source cannot contain whitespace");
+    }
+
+    let wildcard_count = source.matches('*').count();
+    if wildcard_count > 1 || (wildcard_count == 1 && !source.ends_with('*')) {
+        anyhow::bail!("Trusted plugin source may only use '*' as a trailing wildcard");
+    }
+
+    let without_wildcard = source.strip_suffix('*').unwrap_or(source);
+    if without_wildcard.contains("://") {
+        let scheme = without_wildcard
+            .split_once("://")
+            .map(|(scheme, _)| scheme.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matches!(scheme.as_str(), "http" | "https" | "git+https") {
+            anyhow::bail!("Trusted plugin source URL must use http, https, or git+https scheme");
+        }
+        let after_scheme = without_wildcard
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or("");
+        let host = after_scheme
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or("")
+            .rsplit('@')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("");
+        if host.is_empty() || host.starts_with('.') || host.ends_with('.') {
+            anyhow::bail!("Trusted plugin source URL must include a valid host");
+        }
+        return Ok(());
+    }
+
+    let domain = without_wildcard.trim_start_matches("*.");
+    if domain.contains('/')
+        || domain.contains(':')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+    {
+        anyhow::bail!("Trusted plugin domain must be a domain name, not a path or URL fragment");
+    }
+    if domain.is_empty() || !domain.contains('.') {
+        anyhow::bail!("Trusted plugin domain must include a dot, such as plugins.example.com");
+    }
+    if !domain
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
+        anyhow::bail!("Trusted plugin domain contains invalid characters");
+    }
+
+    Ok(())
+}
+
+pub fn add_trusted_plugin_source(config: &mut Config, source: String) -> Result<bool> {
+    validate_plugin_trust_source(&source)?;
+    let source = source.trim().to_string();
+    if config
+        .plugin_trust
+        .trusted_sources
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&source))
+    {
+        return Ok(false);
+    }
+    config.plugin_trust.trusted_sources.push(source);
+    config
+        .plugin_trust
+        .trusted_sources
+        .sort_by_key(|entry| entry.to_ascii_lowercase());
+    Ok(true)
+}
+
+pub fn remove_trusted_plugin_source(config: &mut Config, source: &str) -> bool {
+    let before = config.plugin_trust.trusted_sources.len();
+    config
+        .plugin_trust
+        .trusted_sources
+        .retain(|existing| !existing.eq_ignore_ascii_case(source.trim()));
+    before != config.plugin_trust.trusted_sources.len()
+}
+
+pub fn reset_trusted_plugin_sources(config: &mut Config) {
+    config.plugin_trust.trusted_sources = default_trusted_plugin_sources();
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -273,6 +395,7 @@ impl Default for Config {
             network: "testnet".to_string(),
             wallets: vec![],
             networks,
+            plugin_trust: PluginTrustConfig::default(),
             telemetry_enabled: Some(true),
             wallet_encryption: None,
         }
@@ -511,6 +634,75 @@ mod tests {
         assert!(validate_secret_key("S123").is_err());
         assert!(validate_secret_key("bad:bundle").is_err());
     }
+
+    #[test]
+    fn default_config_includes_plugin_trust_sources() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.plugin_trust.trusted_sources,
+            default_trusted_plugin_sources()
+        );
+    }
+
+    #[test]
+    fn config_without_plugin_trust_deserializes_with_defaults() {
+        let toml = r#"
+version = "1"
+network = "testnet"
+wallets = []
+telemetry_enabled = true
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            cfg.plugin_trust.trusted_sources,
+            default_trusted_plugin_sources()
+        );
+    }
+
+    #[test]
+    fn trusted_plugin_source_management_deduplicates_and_resets() {
+        let mut cfg = Config::default();
+        assert!(add_trusted_plugin_source(&mut cfg, "plugins.example.com".to_string()).unwrap());
+        assert!(!add_trusted_plugin_source(&mut cfg, "PLUGINS.EXAMPLE.COM".to_string()).unwrap());
+        assert!(cfg
+            .plugin_trust
+            .trusted_sources
+            .contains(&"plugins.example.com".to_string()));
+
+        assert!(remove_trusted_plugin_source(
+            &mut cfg,
+            "plugins.example.com"
+        ));
+        assert!(!remove_trusted_plugin_source(
+            &mut cfg,
+            "plugins.example.com"
+        ));
+
+        cfg.plugin_trust.trusted_sources.clear();
+        reset_trusted_plugin_sources(&mut cfg);
+        assert_eq!(
+            cfg.plugin_trust.trusted_sources,
+            default_trusted_plugin_sources()
+        );
+    }
+
+    #[test]
+    fn invalid_trusted_plugin_sources_are_rejected() {
+        for source in [
+            "",
+            "plugins example.com",
+            "https://",
+            "ftp://example.com",
+            "example",
+            "example.com/path",
+            "https://example.com/*/bad",
+        ] {
+            assert!(
+                validate_plugin_trust_source(source).is_err(),
+                "{source} should be invalid"
+            );
+        }
+    }
 }
 
 /// Returns the network passphrase for transaction signing.
@@ -663,10 +855,7 @@ pub fn rename_custom_network(config: &mut Config, old_name: &str, new_name: &str
         anyhow::bail!("Old and new network names are the same");
     }
 
-    let net_cfg = config
-        .networks
-        .remove(old_name)
-        .expect("network exists");
+    let net_cfg = config.networks.remove(old_name).expect("network exists");
     config.networks.insert(new_name.to_string(), net_cfg);
 
     if config.network == old_name {

@@ -30,8 +30,8 @@ pub enum TemplateCommands {
         /// Template name
         name: String,
     },
-    /// Install a template from a directory or .zip archive into the local registry
-    Install {
+    /// Import a template from a directory or .zip archive into the local registry
+    Import {
         /// Path to template directory or .zip package
         path: PathBuf,
         /// Template name (defaults to directory/archive stem)
@@ -133,7 +133,7 @@ pub enum TemplateCommands {
 
 pub fn handle(cmd: TemplateCommands) -> Result<()> {
     match cmd {
-        TemplateCommands::Install {
+        TemplateCommands::Import {
             path,
             name,
             description,
@@ -142,7 +142,7 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
             version,
             cli_version_min,
             cli_version_max,
-        } => install(
+        } => import(
             path,
             name,
             description,
@@ -201,7 +201,7 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
     }
 }
 
-fn install(
+fn import(
     path: PathBuf,
     name: Option<String>,
     description: Option<String>,
@@ -225,8 +225,8 @@ fn install(
         None,
         None,
     )?;
-    p::header("Template Install");
-    p::info("Template package installed into the local registry.");
+    p::header("Template Import");
+    p::info("Template package imported into the local registry.");
     Ok(())
 }
 
@@ -574,7 +574,7 @@ fn info(name: String) -> Result<()> {
     println!();
     p::info("Source & Repository");
     p::kv("Source", &template.source.to_string());
-    if let Some(ref repo) = template.repository_url {
+    if let Some(ref repo) = template.repository {
         p::kv("Repository", repo);
     }
 

@@ -1,7 +1,7 @@
-use clap::Args;
-use std::process::Command;
 use anyhow::{Context, Result};
+use clap::Args;
 use colored::*;
+use std::process::Command;
 
 #[derive(Args, Debug)]
 pub struct DiagnosticsArgs {
@@ -13,12 +13,13 @@ pub struct DiagnosticsArgs {
 /// Handles the `starforge diagnostics` command by bridging execution
 /// to the internal TypeScript/JavaScript hardware utility layer.
 pub fn handle(args: DiagnosticsArgs) -> Result<()> {
-    println!("{}", "🔍 Checking system environment for Node.js runtime...".dimmed());
+    println!(
+        "{}",
+        "🔍 Checking system environment for Node.js runtime...".dimmed()
+    );
 
     // 1. Verify Node.js is installed on the user's machine to run TS diagnostics
-    let node_check = Command::new("node")
-        .arg("-v")
-        .output();
+    let node_check = Command::new("node").arg("-v").output();
 
     if node_check.is_err() {
         anyhow::bail!(
@@ -31,16 +32,22 @@ pub fn handle(args: DiagnosticsArgs) -> Result<()> {
     // 2. Prepare arguments to pass downstream to the TypeScript runner
     // Assumes your built runner script is located in the distribution path or run via ts-node/bundler
     let mut runner = Command::new("node");
-    
+
     // Path points to your project's diagnostics script executor
-    runner.arg("./dist/diagnostics/run.js"); 
+    runner.arg("./dist/diagnostics/run.js");
 
     if let Some(wallet_type) = args.wallet {
         runner.arg("--wallet").arg(wallet_type);
     }
 
-    println!("{}", "🚀 Running hardware wallet connectivity utility...".cyan());
-    println!("{}\n", "--------------------------------------------------".dimmed());
+    println!(
+        "{}",
+        "🚀 Running hardware wallet connectivity utility...".cyan()
+    );
+    println!(
+        "{}\n",
+        "--------------------------------------------------".dimmed()
+    );
 
     // 3. Execute the process and inherit standard output streams so colors/formatting are preserved
     let status = runner

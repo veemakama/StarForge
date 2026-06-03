@@ -10,21 +10,21 @@ and the full plugin lifecycle.
 
 Every installed plugin is assigned one of three trust levels at install time:
 
-| Level | When assigned | StarForge behaviour |
-|---|---|---|
-| `local` | Plugin installed via `--path` (no source URL) | Always loaded without warnings |
-| `trusted` | Source URL matches a known trusted prefix | Loaded without warnings |
+| Level     | When assigned                                 | StarForge behaviour                                  |
+| --------- | --------------------------------------------- | ---------------------------------------------------- |
+| `local`   | Plugin installed via `--path` (no source URL) | Always loaded without warnings                       |
+| `trusted` | Source URL matches a known trusted prefix     | Loaded without warnings                              |
 | `unknown` | Source URL provided but not in the allow-list | Warning shown on load; `--force` required to install |
 
-### Trusted source prefixes
+### Trusted sources
 
-The following URL prefixes are automatically classified as `trusted`:
+Trusted sources are defined in the StarForge configuration (`~/.starforge/config.toml`). By default, it includes:
 
 - `https://github.com/Nanle-code/starforge-*`
 - `https://github.com/StarForge-Labs/*`
 - `https://crates.io/crates/starforge-plugin-*`
 
-Any other source is `unknown`.
+Any other source is `unknown` unless explicitly added to the `plugin_trust.trusted_sources` list in your configuration.
 
 ---
 
@@ -34,11 +34,11 @@ Plugins are native shared libraries loaded at runtime via `libloading`.
 Two compatibility checks run before a plugin is executed:
 
 1. **rustc ABI check** — the plugin must be compiled with the same Rust
-   toolchain version as StarForge.  Mismatches cause undefined behaviour
+   toolchain version as StarForge. Mismatches cause undefined behaviour
    and are rejected immediately.
 
 2. **Core version check** — the plugin's declared `core_version` major
-   number must match the running StarForge major version.  A plugin built
+   number must match the running StarForge major version. A plugin built
    for StarForge `0.x.y` is incompatible with StarForge `1.x.y`.
 
 Both checks produce actionable error messages that tell you exactly what
@@ -87,6 +87,7 @@ starforge plugin verify my-plugin    # verify a specific plugin
 ```
 
 Checks:
+
 - Library file exists on disk at the registered path
 - Trust level is `local` or `trusted`
 

@@ -103,7 +103,13 @@ fn deploy_help_documents_flags() {
 #[test]
 fn network_add_custom_succeeds() {
     let home = isolated_home();
-    let net_name = format!("smoke-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+    let net_name = format!(
+        "smoke-net-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
     let output = starforge(home.path())
         .args([
             "network",
@@ -176,7 +182,13 @@ fn network_switch_unknown_network_fails() {
 #[test]
 fn network_remove_custom_succeeds() {
     let home = isolated_home();
-    let net_name = format!("remove-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+    let net_name = format!(
+        "remove-net-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
     starforge(home.path())
         .args([
             "network",
@@ -220,8 +232,21 @@ fn network_remove_reserved_fails() {
 #[test]
 fn network_rename_custom_succeeds() {
     let home = isolated_home();
-    let old_name = format!("old-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
-    let new_name = format!("new-net-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() + 1);
+    let old_name = format!(
+        "old-net-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
+    let new_name = format!(
+        "new-net-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+            + 1
+    );
     starforge(home.path())
         .args([
             "network",
@@ -275,7 +300,7 @@ fn network_add_reserved_name_fails() {
 #[test]
 fn config_subcommand_sets_and_shows_telemetry() {
     let home = isolated_home();
-    
+
     // Disable telemetry via config set
     let output2 = starforge(home.path())
         .args(["config", "set", "telemetry.enabled", "false"])
@@ -343,7 +368,7 @@ fn telemetry_subcommand_toggles_status() {
         .output()
         .expect("spawn telemetry enable");
     assert_success(&output4, "starforge telemetry enable");
-    
+
     // Check enabled status
     let output5 = starforge(home.path())
         .args(["telemetry", "status"])
@@ -364,9 +389,8 @@ fn telemetry_respects_env_override() {
     cmd.env("STARFORGE_TELEMETRY", "false");
     let output = cmd.output().expect("spawn telemetry status");
     assert_success(&output, "starforge telemetry status with env override");
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Environment Override"));
     assert!(stdout.contains("false"));
 }
-

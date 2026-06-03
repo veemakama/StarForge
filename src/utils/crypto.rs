@@ -497,8 +497,7 @@ mod tests {
     #[test]
     fn detects_passphrase_reusing_wallet_context() {
         let report =
-            check_passphrase_strength_with_inputs("alice-stronger-passphrase", &["alice"])
-                .unwrap();
+            check_passphrase_strength_with_inputs("alice-stronger-passphrase", &["alice"]).unwrap();
         assert!(report.reused_context);
     }
 
@@ -553,7 +552,11 @@ mod tests {
 
         let encrypted = encrypt_secret(password, secret, Some(&kdf)).unwrap();
         let parts: Vec<&str> = encrypted.split(':').collect();
-        assert_eq!(parts.len(), 6, "expected mem/iterations/parallelism in bundle");
+        assert_eq!(
+            parts.len(),
+            6,
+            "expected mem/iterations/parallelism in bundle"
+        );
 
         let decrypted = decrypt_secret(password, &encrypted).unwrap();
         assert_eq!(secret, decrypted);

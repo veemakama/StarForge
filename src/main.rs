@@ -60,9 +60,9 @@ enum Commands {
     #[command(subcommand)]
     Config(commands::config::ConfigCommands),
 
-    /// Manage global configuration
+    /// Manage telemetry collection
     #[command(subcommand)]
-    Config(commands::config::ConfigCommands),
+    Telemetry(commands::telemetry::TelemetryCommands),
 
     Tx(commands::tx::TxArgs), // fetch transaction for the account
 
@@ -140,6 +140,7 @@ fn main() {
         Commands::Deploy(_) => "deploy",
         Commands::Info => "info",
         Commands::Config(_) => "config",
+        Commands::Telemetry(_) => "telemetry",
         Commands::Tx(_) => "tx",
         Commands::Network(_) => "network",
         Commands::Node(_) => "node",
@@ -168,6 +169,7 @@ fn main() {
         Commands::Deploy(args) => commands::deploy::handle(args),
         Commands::Info => commands::info::handle(),
         Commands::Config(cmd) => commands::config::handle(cmd),
+        Commands::Telemetry(cmd) => commands::telemetry::handle(cmd),
         Commands::Tx(args) => commands::tx::handle(args),
         Commands::Network(cmd) => commands::network::handle(cmd),
         Commands::Node(cmd) => commands::node::handle(cmd),
@@ -212,6 +214,7 @@ fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {
     let plugin_name = &args[0];
     let plugin_args = &args[1..];
 
+    let cfg = utils::config::load()?;
     let reg = plugins::registry::load_registry().unwrap_or_default();
     if reg.plugins.is_empty() {
         anyhow::bail!(
@@ -224,9 +227,13 @@ fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {
     let all_commands = plugins::registry::load_all_registered_commands();
     let known = all_commands.iter().any(|c| c.name == *plugin_name);
     if !known {
-        let available: Vec<String> = all_commands.iter().map(|c| format!("  • {}", c.name)).collect();
+        let available: Vec<String> = all_commands
+            .iter()
+            .map(|c| format!("  • {}", c.name))
+            .collect();
         let hint = if available.is_empty() {
-            "No plugin commands registered. Re-install plugins to discover their commands.".to_string()
+            "No plugin commands registered. Re-install plugins to discover their commands."
+                .to_string()
         } else {
             format!("Available plugin commands:\n{}", available.join("\n"))
         };
@@ -234,11 +241,10 @@ fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {
     }
 
     // Warn about unknown-trust plugins before loading.
-    for pl in reg
-        .plugins
-        .iter()
-        .filter(|p| p.trust == TrustLevel::Unknown && !p.source.is_empty())
-    {
+    for pl in reg.plugins.iter().filter(|p| {
+        plugins::registry::classify_source_with_config(&p.source, &cfg) == TrustLevel::Unknown
+            && !p.source.is_empty()
+    }) {
         eprintln!(
             "  ⚠  Warning: plugin '{}' is from an untrusted source: {}",
             pl.name, pl.source

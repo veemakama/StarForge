@@ -111,7 +111,10 @@ pub fn load_manifest_for_library(library_path: &Path) -> Result<Option<PluginMan
 }
 
 /// Require a manifest when installing; returns a clear error if missing.
-pub fn require_compatible_manifest(library_path: &Path, install_name: &str) -> Result<PluginManifest> {
+pub fn require_compatible_manifest(
+    library_path: &Path,
+    install_name: &str,
+) -> Result<PluginManifest> {
     match load_manifest_for_library(library_path)? {
         Some(manifest) => {
             if manifest.name != install_name {
@@ -163,14 +166,20 @@ fn parse_version_parts(v: &str) -> Option<(u64, u64, u64)> {
 }
 
 fn version_at_least(running: &str, required_min: &str) -> bool {
-    match (parse_version_parts(running), parse_version_parts(required_min)) {
+    match (
+        parse_version_parts(running),
+        parse_version_parts(required_min),
+    ) {
         (Some(a), Some(b)) => a >= b,
         _ => true,
     }
 }
 
 fn version_at_most(running: &str, required_max: &str) -> bool {
-    match (parse_version_parts(running), parse_version_parts(required_max)) {
+    match (
+        parse_version_parts(running),
+        parse_version_parts(required_max),
+    ) {
         (Some(a), Some(b)) => a <= b,
         _ => true,
     }
