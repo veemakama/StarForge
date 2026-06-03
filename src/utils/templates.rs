@@ -463,17 +463,55 @@ pub fn fetch_template_cached(entry: &TemplateEntry, force_refresh: bool) -> Resu
     let dest = cache_root.join(&entry.name);
 
     if dest.exists() {
-        if force_refresh {
-            fs::remove_dir_all(&dest).with_context(|| {
-                format!("Failed to remove cached template at {}", dest.display())
-            })?;
+        let mut should_refresh = force_refresh;
+        if !should_refresh {
+            if let Ok(metadata) = fs::metadata(&dest) {
+                if let Ok(modified) = metadata.modified() {
+                    use std::time::{Duration, SystemTime};
+                    let ttl = Duration::from_secs(24 * 60 * 60); // 24 hours TTL
+                    if SystemTime::now()
+                        .duration_since(modified)
+                        .unwrap_or_else(|_| ttl)
+                        >= ttl
+                    {
+                        should_refresh = true;
+                    }
+                }
+            }
+        }
+
+        if should_refresh {
+            // Rename existing cache to a temporary name to preserve it in case refresh fails
+            let temp_old = cache_root.join(format!("{}.old", entry.name));
+            // Remove any existing temp_old directory
+            if temp_old.exists() {
+                fs::remove_dir_all(&temp_old)?;
+            }
+            fs::rename(&dest, &temp_old)?;
+            
+            // Try to fetch new template
+            match fetch_template(entry, &dest) {
+                Ok(_) => {
+                    // Success - clean up the old temp directory
+                    fs::remove_dir_all(&temp_old).ok(); // Ignore errors during cleanup
+                    Ok(dest)
+                }
+                Err(_) => {
+                    // Failed - restore old cache and use it
+                    if dest.exists() {
+                        fs::remove_dir_all(&dest)?;
+                    }
+                    fs::rename(&temp_old, &dest)?;
+                    Ok(dest)
+                }
+            }
         } else {
             return Ok(dest);
         }
+    } else {
+        fetch_template(entry, &dest)?;
+        Ok(dest)
     }
-
-    fetch_template(entry, &dest)?;
-    Ok(dest)
 }
 
 /// Return the `src/lib.rs` content for a marketplace template, fetching and

@@ -192,7 +192,7 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
             refresh,
         } => search(query, tags, verified, min_quality, refresh),
         TemplateCommands::Show { name } => show(name),
-        TemplateCommands::Remove { name } => remove(name),
+        TemplateCommands::Remove { name, purge } => remove(name, purge),
         TemplateCommands::Init => init(),
         TemplateCommands::Info { name } => info(name),
         TemplateCommands::Install {
@@ -202,8 +202,6 @@ pub fn handle(cmd: TemplateCommands) -> Result<()> {
             force,
         } => install(source, name, version, force),
         TemplateCommands::Update { name, all } => update(name, all),
-        // In the match arm
-TemplateCommands::Remove { name, purge } => remove(name, purge),
     }
 }
 
