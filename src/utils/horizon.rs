@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn build_transaction_query_url_includes_pagination_params() {
-        let mut server = Server::new();
+        let server = Server::new();
         let _guard = TestConfigGuard::new(&server.url(), None);
 
         let filter = TxFilter {

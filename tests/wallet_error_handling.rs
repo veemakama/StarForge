@@ -7,6 +7,7 @@
 
 /// Error handling and edge case tests for wallet operations
 /// Tests failure scenarios, invalid inputs, and error recovery
+
 #[cfg(test)]
 mod wallet_error_handling_tests {
     const VALID_PUBLIC_KEY: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";

@@ -3,7 +3,7 @@ use crate::plugins::manifest;
 use crate::plugins::registry::{self, RegisteredCommand, TrustLevel, UninstallOptions};
 use crate::plugins::{PluginLoadError, PluginManager};
 use crate::utils::print as p;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use starforge::utils::config;
 use std::path::Path;
@@ -135,31 +135,29 @@ fn install(name: String, path: Option<PathBuf>, source: Option<String>, force: b
 
     let plugin_manifest = manifest::require_compatible_manifest(&lib_path, &name)?;
 
-    // Load the plugin to discover the commands and description it registers.
-    let (discovered_commands, plugin_description) = {
-        let mut pm = PluginManager::new();
-        unsafe {
-            pm.load_plugin(&lib_path).with_context(|| {
-                format!("Failed to load plugin '{}' to discover commands", name)
-            })?;
-        }
-        let commands: Vec<RegisteredCommand> = pm
-            .list_commands()
-            .into_iter()
-            .map(|c| RegisteredCommand {
-                name: c.name,
-                description: c.description,
-            })
-            .collect();
-        let description = pm
-            .list_plugins()
-            .into_iter()
-            .find(|(plugin_name, _, _)| *plugin_name == name)
-            .map(|(_, desc, _)| desc.to_string())
-            .filter(|d| !d.is_empty())
-            .unwrap_or_else(|| plugin_manifest.description.clone());
-        (commands, description)
-    };
+    // Attempt to load the plugin to discover commands and description. Best-effort:
+    // libraries that cannot load at install time should not block registration.
+    let (discovered_commands, plugin_description) =
+        match discover_plugin_metadata(&lib_path.to_string_lossy()) {
+            Ok((commands, description)) => {
+                let description = if description.is_empty() {
+                    plugin_manifest.description.clone()
+                } else {
+                    description
+                };
+                (commands, description)
+            }
+            Err(e) => {
+                p::warn(&format!(
+                    "Could not load plugin '{}' to discover commands: {}",
+                    name, e
+                ));
+                p::info(
+                    "Proceeding with installation; run 'starforge plugin audit' to validate it.",
+                );
+                (Vec::new(), plugin_manifest.description.clone())
+            }
+        };
 
     registry::install_plugin(
         &name,
@@ -237,45 +235,6 @@ fn list() -> Result<()> {
         println!();
         p::info("Commands");
         p::table(&["Plugin", "Command", "Description"], &command_rows);
-    }
-
-    p::separator();
-    Ok(())
-}
-
-fn commands(name: Option<String>) -> Result<()> {
-    p::header("Plugin Commands");
-    let reg = registry::load_registry().unwrap_or_default();
-    if reg.plugins.is_empty() {
-        p::info("No plugins installed. Use: starforge plugin install <name> --path <lib>");
-        return Ok(());
-    }
-
-    let selected: Vec<_> = match &name {
-        Some(plugin_name) => reg
-            .plugins
-            .iter()
-            .filter(|pl| pl.name == *plugin_name)
-            .collect(),
-        None => reg.plugins.iter().collect(),
-    };
-
-    if let Some(plugin_name) = &name {
-        if selected.is_empty() {
-            anyhow::bail!("Plugin '{}' not found in registry", plugin_name);
-        }
-    }
-
-    for pl in selected {
-        println!();
-        p::info(&format!("{}:", pl.name));
-        if pl.commands.is_empty() {
-            p::warn("  No commands registered");
-            continue;
-        }
-        for cmd in &pl.commands {
-            println!("  {}  — {}", cmd.name.cyan(), cmd.description.dimmed());
-        }
     }
 
     p::separator();
@@ -619,61 +578,6 @@ fn update(name: Option<String>, yes: bool) -> Result<()> {
 
     if failed > 0 {
         anyhow::bail!("{} plugin(s) failed to update. See warnings above.", failed);
-    }
-
-    Ok(())
-}
-
-fn discover_commands_from_library(path: &str) -> Result<Vec<RegisteredCommand>> {
-    let mut pm = PluginManager::new();
-    unsafe {
-        pm.load_plugin_diagnosed(path)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-    }
-    Ok(pm
-        .list_commands()
-        .into_iter()
-        .map(|c| RegisteredCommand {
-            name: c.name,
-            description: c.description,
-        })
-        .collect())
-}
-
-fn commands(name: Option<String>) -> Result<()> {
-    p::header("Plugin Commands");
-
-    let reg = registry::load_registry().unwrap_or_default();
-    if reg.plugins.is_empty() {
-        p::info("No plugins installed.");
-        return Ok(());
-    }
-
-    let to_show: Vec<_> = match &name {
-        Some(n) => {
-            let found: Vec<_> = reg.plugins.iter().filter(|p| &p.name == n).collect();
-            if found.is_empty() {
-                anyhow::bail!("Plugin '{}' is not installed.", n);
-            }
-            found
-        }
-        None => reg.plugins.iter().collect(),
-    };
-
-    for (idx, pl) in to_show.iter().enumerate() {
-        if to_show.len() > 1 {
-            if idx > 0 {
-                println!();
-            }
-            p::kv_accent("Plugin", &pl.name);
-        }
-        if pl.commands.is_empty() {
-            p::info("  (no commands registered)");
-        } else {
-            for cmd in &pl.commands {
-                p::info(&format!("  • {}  — {}", cmd.name, cmd.description));
-            }
-        }
     }
 
     Ok(())

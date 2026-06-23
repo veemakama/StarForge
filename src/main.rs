@@ -5,7 +5,8 @@
     clippy::redundant_closure,
     clippy::too_many_arguments,
     clippy::type_complexity,
-    clippy::unnecessary_lazy_evaluations
+    clippy::unnecessary_lazy_evaluations,
+    clippy::needless_borrow
 )]
 
 mod commands;

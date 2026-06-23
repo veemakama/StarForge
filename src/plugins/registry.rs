@@ -50,6 +50,21 @@ pub fn classify_source(source: &str) -> TrustLevel {
     TrustLevel::Unknown
 }
 
+/// Classify a source URL using built-in allowlist plus user-configured trusted sources.
+pub fn classify_source_with_config(source: &str, config: &Config) -> TrustLevel {
+    if source.is_empty() {
+        return TrustLevel::Local;
+    }
+
+    for trusted in &config.plugin_trust.trusted_sources {
+        if source_matches_trusted_source(source, trusted) {
+            return TrustLevel::Trusted;
+        }
+    }
+
+    classify_source(source)
+}
+
 pub fn source_matches_trusted_source(source: &str, trusted_source: &str) -> bool {
     let source = source.trim();
     let trusted_source = trusted_source.trim();
