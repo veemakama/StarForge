@@ -5,6 +5,7 @@ use crate::plugins::{PluginLoadError, PluginManager};
 use crate::utils::print as p;
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use colored::*;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -207,6 +208,49 @@ fn list() -> Result<()> {
             println!();
         }
     }
+    p::separator();
+    Ok(())
+}
+
+fn commands(name: Option<String>) -> Result<()> {
+    p::header("Plugin Commands");
+    let reg = registry::load_registry().unwrap_or_default();
+    if reg.plugins.is_empty() {
+        p::info("No plugins installed. Use: starforge plugin install <name> --path <lib>");
+        return Ok(());
+    }
+
+    let selected: Vec<_> = match &name {
+        Some(plugin_name) => reg
+            .plugins
+            .iter()
+            .filter(|pl| pl.name == *plugin_name)
+            .collect(),
+        None => reg.plugins.iter().collect(),
+    };
+
+    if let Some(plugin_name) = &name {
+        if selected.is_empty() {
+            anyhow::bail!("Plugin '{}' not found in registry", plugin_name);
+        }
+    }
+
+    for pl in selected {
+        println!();
+        p::info(&format!("{}:", pl.name));
+        if pl.commands.is_empty() {
+            p::warn("  No commands registered");
+            continue;
+        }
+        for cmd in &pl.commands {
+            println!(
+                "  {}  — {}",
+                cmd.name.cyan(),
+                cmd.description.dimmed()
+            );
+        }
+    }
+
     p::separator();
     Ok(())
 }
