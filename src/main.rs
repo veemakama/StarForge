@@ -109,6 +109,14 @@ enum Commands {
     #[command(subcommand)]
     Upgrade(commands::upgrade::UpgradeCommands),
 
+    /// Multi-contract deployment orchestration
+    #[command(subcommand)]
+    Orchestrate(commands::orchestrate::OrchestrateCommands),
+
+    /// Security hardening, validation, and monitoring
+    #[command(subcommand)]
+    Security(commands::security::SecurityCommands),
+
     /// Static analysis and linting for Soroban contracts
     Lint(commands::lint::LintArgs),
 
@@ -168,6 +176,8 @@ fn main() {
         Commands::Plugin(_) => "plugin",
         Commands::Template(_) => "template",
         Commands::Upgrade(_) => "upgrade",
+        Commands::Orchestrate(_) => "orchestrate",
+        Commands::Security(_) => "security",
         Commands::Lint(_) => "lint",
         Commands::Diagnostics(_) => "diagnostics",
         Commands::Social(_) => "social",
@@ -200,6 +210,8 @@ fn main() {
         Commands::Plugin(args) => commands::plugin::handle(args),
         Commands::Template(args) => commands::template::handle(args),
         Commands::Upgrade(cmd) => commands::upgrade::handle(cmd),
+        Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd),
+        Commands::Security(cmd) => commands::security::handle(cmd),
         Commands::Lint(args) => commands::lint::handle(args),
         Commands::Diagnostics(args) => commands::diagnostics::handle(args),
         Commands::Social(cmd) => commands::social::handle(cmd),
