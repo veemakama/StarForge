@@ -25,5 +25,8 @@ pub mod templates;
 pub mod test_coverage;
 pub mod test_generator;
 pub mod test_runner;
+pub mod test_automation;
 pub mod tutorial_engine;
 pub mod tx_batch;
+pub mod documentation;
+pub mod orchestration;

@@ -123,6 +123,18 @@ enum Commands {
     /// Run connectivity diagnostics for attached Ledger/Trezor devices
     Diagnostics(commands::diagnostics::DiagnosticsArgs),
 
+    /// Social features and collaboration tools
+    #[command(subcommand)]
+    Social(commands::social::SocialCommands),
+
+    /// Contract documentation portal
+    #[command(subcommand)]
+    Docs(commands::docs::DocsCommands),
+
+    /// Deployment orchestration for multi-contract deployments
+    #[command(subcommand)]
+    Orchestrate(commands::orchestrate::OrchestrateCommands),
+
     /// Execute an installed plugin command (e.g. `starforge defi ...`)
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -168,6 +180,9 @@ fn main() {
         Commands::Security(_) => "security",
         Commands::Lint(_) => "lint",
         Commands::Diagnostics(_) => "diagnostics",
+        Commands::Social(_) => "social",
+        Commands::Docs(_) => "docs",
+        Commands::Orchestrate(_) => "orchestrate",
         Commands::External(_) => "external",
     }
     .to_string();
@@ -199,6 +214,9 @@ fn main() {
         Commands::Security(cmd) => commands::security::handle(cmd),
         Commands::Lint(args) => commands::lint::handle(args),
         Commands::Diagnostics(args) => commands::diagnostics::handle(args),
+        Commands::Social(cmd) => commands::social::handle(cmd),
+        Commands::Docs(cmd) => commands::docs::handle(cmd),
+        Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd),
         Commands::External(args) => handle_external_plugin(args),
     };
     let duration = start.elapsed();
