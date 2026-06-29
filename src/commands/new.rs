@@ -52,13 +52,13 @@ pub async fn handle(cmd: NewCommands) -> Result<()> {
             force_refresh,
         } => {
             if let Some(query) = search {
-                return search_templates(&query);
+                return search_templates(&query).await;
             }
             let name = name.ok_or_else(|| {
                 anyhow::anyhow!("A contract name is required unless --search is used")
             })?;
             if interactive {
-                scaffold_contract_interactive(name)
+                scaffold_contract_interactive(name).await
             } else {
                 scaffold_contract(
                     name,
@@ -69,15 +69,15 @@ pub async fn handle(cmd: NewCommands) -> Result<()> {
                     "none",
                     true,
                     force_refresh,
-                )
+                ).await
             }
         }
         NewCommands::Dapp { name } => scaffold_dapp(name),
     }
 }
 
-fn search_templates(query: &str) -> Result<()> {
-    let results = templates::search_templates(query, None)?;
+async fn search_templates(query: &str) -> Result<()> {
+    let results = templates::search_templates(query, None).await?;
     p::header(&format!("Template search results for '{}'", query));
 
     if results.is_empty() {
@@ -110,7 +110,7 @@ struct ContractOptions {
     include_tests: bool,
 }
 
-fn scaffold_contract_interactive(default_name: String) -> Result<()> {
+async fn scaffold_contract_interactive(default_name: String) -> Result<()> {
     let theme = ColorfulTheme::default();
 
     println!();
@@ -197,9 +197,10 @@ fn scaffold_contract_interactive(default_name: String) -> Result<()> {
         opts.include_tests,
         false, // interactive path never force-refreshes
     )
+    .await
 }
 
-fn scaffold_contract(
+async fn scaffold_contract(
     name: String,
     template: String,
     source: &str,
@@ -220,7 +221,7 @@ fn scaffold_contract(
     p::header(&format!("Scaffolding Soroban contract: {}", name));
     println!("  Template: {}\n", template.cyan());
     // Ensure selected template is compatible with current CLI version
-    let entry = templates::get_template(&template)?;
+    let entry = templates::get_template(&template).await?;
     match templates::check_template_compatibility(&entry) {
         templates::CompatibilityStatus::Compatible => {}
         templates::CompatibilityStatus::TooOld {
@@ -270,7 +271,7 @@ fn scaffold_contract(
         "voting" => voting_template(&name),
         "nft" => nft_template(&name),
         _ => {
-            if let Some(custom) = templates::template_source_content(&template, force_refresh)? {
+            if let Some(custom) = templates::template_source_content(&template, force_refresh).await? {
                 custom
             } else if template == "hello-world" {
                 hello_world_template(&name, storage, include_tests)
@@ -964,7 +965,7 @@ Source: `{source}`
 
 // ── Template Marketplace ──────────────────────────────────────────────────────
 
-fn handle_template_search(query: &str, tags: Option<&str>) -> Result<()> {
+async fn handle_template_search(query: &str, tags: Option<&str>) -> Result<()> {
     p::header("Template Marketplace — Search");
     p::kv("Query", query);
 
@@ -981,7 +982,7 @@ fn handle_template_search(query: &str, tags: Option<&str>) -> Result<()> {
 
     println!();
 
-    let results = templates::search_templates(query, tag_list.as_deref())?;
+    let results = templates::search_templates(query, tag_list.as_deref()).await?;
 
     if results.is_empty() {
         p::info("No templates found matching your search.");
@@ -1084,11 +1085,11 @@ fn install_step<T>(
     }
 }
 
-fn scaffold_from_marketplace(name: String, template_name: String) -> Result<()> {
+async fn scaffold_from_marketplace(name: String, template_name: String) -> Result<()> {
     p::header(&format!("Scaffolding from Marketplace: {}", template_name));
 
     // Get template from registry
-    let template = templates::get_template(&template_name).with_context(|| {
+    let template = templates::get_template(&template_name).await.with_context(|| {
         format!(
             "Template '{}' not found in the registry.\n  • List templates with `starforge template list`.\n  • Search with `starforge new contract --search {}`.",
             template_name, template_name
@@ -1176,7 +1177,7 @@ fn scaffold_from_marketplace(name: String, template_name: String) -> Result<()> 
 
     // Update download count (best-effort; failure here must not roll back a
     // successfully installed project).
-    if let Ok(mut registry) = templates::load_registry() {
+    if let Ok(mut registry) = templates::load_registry().await {
         if let Some(entry) = registry
             .templates
             .iter_mut()

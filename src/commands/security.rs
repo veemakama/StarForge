@@ -118,7 +118,7 @@ pub async fn handle(cmd: SecurityCommands) -> Result<()> {
         SecurityCommands::Checklist(args) => handle_checklist(args),
         SecurityCommands::Validate(args) => handle_validate(args),
         SecurityCommands::Report(args) => handle_report(args),
-        SecurityCommands::Monitor(args) => handle_monitor(args),
+        SecurityCommands::Monitor(args) => handle_monitor(args).await,
         SecurityCommands::Incident(args) => handle_incident(args),
         SecurityCommands::Audit(args) => handle_audit(args),
     }
@@ -219,7 +219,7 @@ fn handle_report(args: ReportArgs) -> Result<()> {
     Ok(())
 }
 
-fn handle_monitor(args: SecurityMonitorArgs) -> Result<()> {
+async fn handle_monitor(args: SecurityMonitorArgs) -> Result<()> {
     config::validate_contract_id(&args.contract)?;
     config::validate_network(&args.network)?;
 
@@ -246,7 +246,7 @@ fn handle_monitor(args: SecurityMonitorArgs) -> Result<()> {
     fs::create_dir_all(&report_dir)?;
 
     while running.load(Ordering::SeqCst) {
-        match stream.next_batch() {
+        match stream.next_batch().await {
             Ok(batch) => {
                 for event in batch {
                     let security_events = evaluate_event(
@@ -287,11 +287,11 @@ fn handle_monitor(args: SecurityMonitorArgs) -> Result<()> {
                 if !args.follow {
                     break;
                 }
-                stream.sleep();
+                stream.sleep().await;
             }
             Err(err) => {
                 notifications::warn(&format!("Stream error: {}. Retrying…", err));
-                stream.sleep_backoff();
+                stream.sleep_backoff().await;
             }
         }
     }

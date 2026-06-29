@@ -10,14 +10,14 @@ pub struct LocalSorobanSandbox {
 }
 
 impl LocalSorobanSandbox {
-    pub fn new<P: AsRef<Path>>(wasm_path: P, network: &str) -> Result<Self> {
+    pub async fn new<P: AsRef<Path>>(wasm_path: P, network: &str) -> Result<Self> {
         let wasm_path = wasm_path.as_ref().to_path_buf();
         if !wasm_path.exists() {
             anyhow::bail!("Contract wasm not found: {}", wasm_path.display());
         }
 
         if network == "docker-testnet" {
-            mock_soroban::ensure_docker_sandbox()?;
+            mock_soroban::ensure_docker_sandbox().await?;
         }
 
         Ok(Self {

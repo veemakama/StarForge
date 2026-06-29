@@ -925,7 +925,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reqwest blocking runtime conflict with current_thread tokio runtime"]
     fn check_soroban_rpc_url_reports_healthy_endpoint() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -946,7 +945,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reqwest blocking runtime conflict with current_thread tokio runtime"]
     fn check_soroban_rpc_url_rejects_error_response() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

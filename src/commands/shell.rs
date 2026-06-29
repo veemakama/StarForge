@@ -28,7 +28,7 @@ pub async fn handle(args: ShellArgs) -> Result<()> {
     p::separator();
     println!();
 
-    let sandbox = LocalSorobanSandbox::new(&args.contract, &args.network)?;
+    let sandbox = LocalSorobanSandbox::new(&args.contract, &args.network).await?;
     let runner = ShellRunner { sandbox };
     let repl_options = repl::ReplOptions {
         history_enabled: !args.no_history,

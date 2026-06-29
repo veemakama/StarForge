@@ -1,3 +1,4 @@
+use crate::utils::http_client;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -514,8 +515,8 @@ pub fn fetch_template_cached(entry: &TemplateEntry, force_refresh: bool) -> Resu
 /// caching it if necessary.
 ///
 /// Returns `None` when the template name is not found in the registry.
-pub fn template_source_content(name: &str, force_refresh: bool) -> Result<Option<String>> {
-    let registry = load_registry()?;
+pub async fn template_source_content(name: &str, force_refresh: bool) -> Result<Option<String>> {
+    let registry = load_registry().await?;
     let entry = match registry.templates.into_iter().find(|t| t.name == name) {
         Some(e) => e,
         None => return Ok(None),
@@ -532,7 +533,7 @@ pub fn template_source_content(name: &str, force_refresh: bool) -> Result<Option
     }
 }
 
-pub fn load_registry() -> Result<TemplateRegistry> {
+pub async fn load_registry() -> Result<TemplateRegistry> {
     // Determine remote registry URL, falling back to the default global index.
     let remote_url = std::env::var("STARFORGE_TEMPLATE_REGISTRY_URL")
         .ok()
@@ -566,7 +567,7 @@ pub fn load_registry() -> Result<TemplateRegistry> {
     }
 
     // Either forced refresh or cache is missing/old – attempt to fetch remote.
-    match fetch_and_cache_remote(&remote_url) {
+    match fetch_and_cache_remote(&remote_url).await {
         Ok(registry) => Ok(registry),
         Err(_fetch_err) => {
             // If the remote fetch failed but a cached registry exists, fall back to it.
@@ -601,10 +602,11 @@ pub fn save_registry(registry: &TemplateRegistry) -> Result<()> {
 }
 
 /// Fetches a remote JSON template registry, caches it locally, and returns the parsed registry.
-fn fetch_and_cache_remote(url: &str) -> Result<TemplateRegistry> {
-    // Use `ureq` to perform a simple GET request.
-    let response = ureq::get(url)
-        .call()
+async fn fetch_and_cache_remote(url: &str) -> Result<TemplateRegistry> {
+    let response = http_client::get_client()
+        .get(url)
+        .send()
+        .await
         .with_context(|| format!("Failed to fetch remote template registry from {}", url))?;
     if response.status() != 200 {
         anyhow::bail!(
@@ -613,7 +615,8 @@ fn fetch_and_cache_remote(url: &str) -> Result<TemplateRegistry> {
         );
     }
     let json_str = response
-        .into_string()
+        .text()
+        .await
         .with_context(|| "Failed to read response body as string")?;
     // Parse the JSON into our TemplateRegistry struct.
     let registry: TemplateRegistry = serde_json::from_str(&json_str)
@@ -704,8 +707,8 @@ fn relevance_for(entry: &TemplateEntry, query_lower: &str) -> (u32, Vec<String>)
 /// (verification, documentation, usage, maintenance), then by raw downloads.
 /// An empty query lists every template that satisfies the filters, ranked by
 /// quality alone.
-pub fn search_templates_ranked(query: &str, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
-    let registry = load_registry()?;
+pub async fn search_templates_ranked(query: &str, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
+    let registry = load_registry().await?;
     let query_lower = query.trim().to_lowercase();
 
     let mut results: Vec<SearchResult> = registry
@@ -755,19 +758,19 @@ pub fn search_templates_ranked(query: &str, filters: &SearchFilters) -> Result<V
 }
 
 /// Backwards-compatible search returning just the ranked template entries.
-pub fn search_templates(query: &str, tags: Option<&[String]>) -> Result<Vec<TemplateEntry>> {
+pub async fn search_templates(query: &str, tags: Option<&[String]>) -> Result<Vec<TemplateEntry>> {
     let filters = SearchFilters {
         tags: tags.map(|t| t.to_vec()).unwrap_or_default(),
         ..Default::default()
     };
-    Ok(search_templates_ranked(query, &filters)?
+    Ok(search_templates_ranked(query, &filters).await?
         .into_iter()
         .map(|r| r.entry)
         .collect())
 }
 
-pub fn get_template(name: &str) -> Result<TemplateEntry> {
-    let registry = load_registry()?;
+pub async fn get_template(name: &str) -> Result<TemplateEntry> {
+    let registry = load_registry().await?;
     registry
         .templates
         .into_iter()
@@ -775,11 +778,11 @@ pub fn get_template(name: &str) -> Result<TemplateEntry> {
         .ok_or_else(|| anyhow::anyhow!("Template '{}' not found in registry", name))
 }
 
-pub fn get_template_by_name_and_version(
+pub async fn get_template_by_name_and_version(
     name: &str,
     version: Option<&str>,
 ) -> Result<TemplateEntry> {
-    let registry = load_registry()?;
+    let registry = load_registry().await?;
     let mut matching: Vec<_> = registry
         .templates
         .into_iter()
@@ -813,8 +816,8 @@ fn semver_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     parse_version(a).cmp(&parse_version(b))
 }
 
-pub fn add_template(entry: TemplateEntry) -> Result<()> {
-    let mut registry = load_registry()?;
+pub async fn add_template(entry: TemplateEntry) -> Result<()> {
+    let mut registry = load_registry().await?;
 
     // Check if template already exists
     if let Some(existing) = registry.templates.iter_mut().find(|t| t.name == entry.name) {
@@ -831,8 +834,8 @@ pub fn add_template(entry: TemplateEntry) -> Result<()> {
 
 /// Remove a template from the registry.
 /// If `purge` is true, also deletes any cached/downloaded assets.
-pub fn remove_template(name: &str, purge: bool) -> Result<()> {
-    let mut registry = load_registry()?;
+pub async fn remove_template(name: &str, purge: bool) -> Result<()> {
+    let mut registry = load_registry().await?;
     let before = registry.templates.len();
 
     registry.templates.retain(|t| t.name != name);
@@ -882,8 +885,8 @@ fn purge_template_assets(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn update_template(name: &str) -> Result<()> {
-    let entry = get_template(name)?;
+pub async fn update_template(name: &str) -> Result<()> {
+    let entry = get_template(name).await?;
 
     match &entry.source {
         TemplateSource::Git { url, branch } => {
@@ -997,7 +1000,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn publish_template(
+pub async fn publish_template(
     template_path: &Path,
     name: String,
     description: String,
@@ -1018,12 +1021,12 @@ pub fn publish_template(
         None,
         None,
         None,
-    )
+    ).await
 }
 
 /// Like `publish_template` but also records optional CLI version constraints.
 /// Install a template from a directory or `.zip` archive into the local registry.
-pub fn install_template_package(
+pub async fn install_template_package(
     package_path: &Path,
     name: String,
     description: String,
@@ -1046,10 +1049,10 @@ pub fn install_template_package(
         None,
         None,
         None,
-    )
+    ).await
 }
 
-pub fn publish_template_versioned(
+pub async fn publish_template_versioned(
     template_path: &Path,
     name: String,
     description: String,
@@ -1106,7 +1109,7 @@ pub fn publish_template_versioned(
         documentation,
     };
 
-    add_template(entry)?;
+    add_template(entry).await?;
 
     Ok(())
 }
@@ -1261,7 +1264,7 @@ pub fn validate_template_structure_with_constraints(
 /// 1. Starts with `https://`, `http://`, `git://`, or ends with `.git` → git URL
 /// 2. Path exists on disk, or starts with `/`, `./`, or `../` → local path
 /// 3. Anything else → treated as a registry template name (marketplace lookup)
-pub fn install_template(
+pub async fn install_template(
     source: &str,
     name_override: Option<&str>,
     version: Option<&str>,
@@ -1272,7 +1275,7 @@ pub fn install_template(
         || source.starts_with("git://")
         || source.ends_with(".git")
     {
-        return install_from_git_url(source, name_override, force);
+        return install_from_git_url(source, name_override, force).await;
     }
 
     let path = Path::new(source);
@@ -1281,13 +1284,13 @@ pub fn install_template(
         || source.starts_with("./")
         || source.starts_with("../")
     {
-        return install_from_local_path(path, name_override, force);
+        return install_from_local_path(path, name_override, force).await;
     }
 
-    install_from_registry(source, version, force)
+    install_from_registry(source, version, force).await
 }
 
-fn install_from_git_url(
+async fn install_from_git_url(
     url: &str,
     name_override: Option<&str>,
     force: bool,
@@ -1301,7 +1304,7 @@ fn install_from_git_url(
             .to_string()
     });
 
-    let mut registry = load_registry()?;
+    let mut registry = load_registry().await?;
     if registry.templates.iter().any(|t| t.name == name) && !force {
         anyhow::bail!(
             "Template '{}' is already installed. Use --force to overwrite.",
@@ -1353,7 +1356,7 @@ fn install_from_git_url(
     Ok(entry)
 }
 
-fn install_from_local_path(
+async fn install_from_local_path(
     path: &Path,
     name_override: Option<&str>,
     force: bool,
@@ -1369,7 +1372,7 @@ fn install_from_local_path(
             .to_string()
     });
 
-    let mut registry = load_registry()?;
+    let mut registry = load_registry().await?;
     if registry.templates.iter().any(|t| t.name == name) && !force {
         anyhow::bail!(
             "Template '{}' is already installed. Use --force to overwrite.",
@@ -1420,8 +1423,8 @@ fn install_from_local_path(
     Ok(entry)
 }
 
-fn install_from_registry(name: &str, version: Option<&str>, force: bool) -> Result<TemplateEntry> {
-    let entry = get_template_by_name_and_version(name, version)?;
+async fn install_from_registry(name: &str, version: Option<&str>, force: bool) -> Result<TemplateEntry> {
+    let entry = get_template_by_name_and_version(name, version).await?;
     assert_template_compatible(&entry)?;
 
     let dest = template_storage_dir()?.join(&entry.name);
@@ -1449,8 +1452,8 @@ fn install_from_registry(name: &str, version: Option<&str>, force: bool) -> Resu
 
 /// Re-fetch a git-sourced template into its local storage directory, updating
 /// it in place. Only git-sourced templates support this operation.
-pub fn update_installed_template(name: &str) -> Result<()> {
-    let entry = get_template(name)?;
+pub async fn update_installed_template(name: &str) -> Result<()> {
+    let entry = get_template(name).await?;
 
     match &entry.source {
         TemplateSource::Git { url, branch } => {
@@ -1468,7 +1471,7 @@ pub fn update_installed_template(name: &str) -> Result<()> {
 
             fetch_git_template(url, branch.as_deref(), &dest)?;
 
-            let mut registry = load_registry()?;
+            let mut registry = load_registry().await?;
             if let Some(t) = registry.templates.iter_mut().find(|t| t.name == name) {
                 t.path = Some(dest.to_string_lossy().to_string());
                 t.updated_at = String::new();
@@ -1487,8 +1490,8 @@ pub fn update_installed_template(name: &str) -> Result<()> {
 }
 
 /// Update all git-sourced templates. Returns a list of (name, result) pairs.
-pub fn update_all_installed_templates() -> Result<Vec<(String, Result<()>)>> {
-    let registry = load_registry()?;
+pub async fn update_all_installed_templates() -> Result<Vec<(String, Result<()>)>> {
+    let registry = load_registry().await?;
     let git_names: Vec<String> = registry
         .templates
         .iter()
@@ -1496,13 +1499,12 @@ pub fn update_all_installed_templates() -> Result<Vec<(String, Result<()>)>> {
         .map(|t| t.name.clone())
         .collect();
 
-    Ok(git_names
-        .into_iter()
-        .map(|name| {
-            let result = update_installed_template(&name);
-            (name, result)
-        })
-        .collect())
+    let mut results = Vec::new();
+    for name in git_names {
+        let result = update_installed_template(&name).await;
+        results.push((name, result));
+    }
+    Ok(results)
 }
 
 #[cfg(test)]

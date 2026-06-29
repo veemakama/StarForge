@@ -1,6 +1,6 @@
+use crate::utils::http_client;
 use anyhow::{Context, Result};
 use std::process::Command;
-use std::thread;
 use std::time::Duration;
 
 pub const CONTAINER_NAME: &str = "starforge-devnet";
@@ -89,16 +89,16 @@ fn start_existing_container() -> Result<()> {
     Ok(())
 }
 
-pub fn wait_for_healthy(host_port: u16) -> Result<()> {
+pub async fn wait_for_healthy(host_port: u16) -> Result<()> {
     let root_url = format!("http://127.0.0.1:{}/", host_port);
-    let rpc_url = rpc_url(host_port);
+    let soroban_rpc_url = rpc_url(host_port);
 
     for attempt in 1..=HEALTH_ATTEMPTS {
-        if probe_url(&root_url) || probe_url(&rpc_url) {
+        if probe_url(&root_url).await || probe_url(&soroban_rpc_url).await {
             return Ok(());
         }
         if attempt < HEALTH_ATTEMPTS {
-            thread::sleep(HEALTH_INTERVAL);
+            tokio::time::sleep(HEALTH_INTERVAL).await;
         }
     }
 
@@ -109,20 +109,21 @@ pub fn wait_for_healthy(host_port: u16) -> Result<()> {
     )
 }
 
-fn probe_url(url: &str) -> bool {
-    ureq::get(url)
-        .timeout(Duration::from_secs(3))
-        .call()
-        .map(|r| r.status() < 500)
+async fn probe_url(url: &str) -> bool {
+    http_client::get_client()
+        .get(url)
+        .send()
+        .await
+        .map(|r| r.status().as_u16() < 500)
         .unwrap_or(false)
 }
 
 /// Start (or reuse) the local quickstart devnet container and wait until healthy.
-pub fn start_devnet(host_port: u16) -> Result<()> {
+pub async fn start_devnet(host_port: u16) -> Result<()> {
     ensure_docker_available()?;
 
     if container_running()? {
-        wait_for_healthy(host_port)?;
+        wait_for_healthy(host_port).await?;
         return Ok(());
     }
 
@@ -132,12 +133,12 @@ pub fn start_devnet(host_port: u16) -> Result<()> {
         run_container(host_port)?;
     }
 
-    wait_for_healthy(host_port)
+    wait_for_healthy(host_port).await
 }
 
 /// Ensure the devnet is running (used by shell / docker-testnet workflows).
-pub fn ensure_running(host_port: u16) -> Result<()> {
-    start_devnet(host_port)
+pub async fn ensure_running(host_port: u16) -> Result<()> {
+    start_devnet(host_port).await
 }
 
 pub fn stop_devnet() -> Result<()> {

@@ -1,3 +1,4 @@
+use crate::utils::http_client;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -168,136 +169,139 @@ impl RegistryClient {
     }
 
     /// Helper to make authenticated HTTP requests.
-    fn build_headers(&self) -> Vec<(&'static str, String)> {
-        let mut headers = vec![("Content-Type", "application/json".to_string())];
+    fn build_headers(&self) -> Vec<(String, String)> {
+        let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
         if let Some(ref token) = self.token {
-            headers.push(("Authorization", format!("Bearer {}", token)));
+            headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
         }
         headers
     }
 
     /// Search the remote registry.
-    pub fn search(&self, req: &SearchRequest) -> Result<SearchResponse> {
+    pub async fn search(&self, req: &SearchRequest) -> Result<SearchResponse> {
         let url = format!("{}/api/templates/search", self.registry_url);
-        let payload = serde_json::to_string(req)?;
+        let client = http_client::get_client();
 
-        let resp = ureq::post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&payload)
+        let mut http_req = client.post(&url).json(req);
+        for (key, value) in self.build_headers() {
+            http_req = http_req.header(&key, &value);
+        }
+
+        let resp = http_req
+            .send()
+            .await
             .with_context(|| format!("Failed to search remote registry at {}", url))?;
 
         if resp.status() != 200 {
-            anyhow::bail!(
-                "Search failed with status {}: {}",
-                resp.status(),
-                resp.into_string().unwrap_or_default()
-            );
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Search failed with status {}: {}", status, body);
         }
 
-        let result: SearchResponse = resp.into_json()?;
+        let result: SearchResponse = resp.json().await?;
         Ok(result)
     }
 
     /// Get details of a specific template.
-    pub fn get_template(&self, name: &str, version: Option<&str>) -> Result<RemoteTemplateEntry> {
+    pub async fn get_template(&self, name: &str, version: Option<&str>) -> Result<RemoteTemplateEntry> {
         let version_param = version.unwrap_or("latest");
         let url = format!(
             "{}/api/templates/{}/{}",
             self.registry_url, name, version_param
         );
 
-        let resp = ureq::get(&url)
-            .call()
+        let resp = http_client::get_client()
+            .get(&url)
+            .send()
+            .await
             .with_context(|| format!("Failed to fetch template from remote registry: {}", url))?;
 
         if resp.status() != 200 {
-            anyhow::bail!(
-                "Template not found with status {}: {}",
-                resp.status(),
-                resp.into_string().unwrap_or_default()
-            );
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Template not found with status {}: {}", status, body);
         }
 
-        let result: RemoteTemplateEntry = resp.into_json()?;
+        let result: RemoteTemplateEntry = resp.json().await?;
         Ok(result)
     }
 
     /// Publish a template to the remote registry.
-    pub fn publish(&self, req: &PublishTemplateRequest) -> Result<PublishTemplateResponse> {
+    pub async fn publish(&self, req: &PublishTemplateRequest) -> Result<PublishTemplateResponse> {
         let url = format!("{}/api/templates/publish", self.registry_url);
-        let payload = serde_json::to_string(req)?;
+        let client = http_client::get_client();
 
-        let mut request = ureq::post(&url).set("Content-Type", "application/json");
-
-        if let Some(ref token) = self.token {
-            request = request.set("Authorization", &format!("Bearer {}", token));
+        let mut http_req = client.post(&url).json(req);
+        for (key, value) in self.build_headers() {
+            http_req = http_req.header(&key, &value);
         }
 
-        let resp = request
-            .send_string(&payload)
+        let resp = http_req
+            .send()
+            .await
             .with_context(|| format!("Failed to publish template to {}", url))?;
 
-        let result: PublishTemplateResponse = resp.into_json()?;
+        let result: PublishTemplateResponse = resp.json().await?;
         Ok(result)
     }
 
     /// Authenticate with the remote registry.
-    pub fn authenticate(&self, email: &str, password: &str) -> Result<AuthResponse> {
+    pub async fn authenticate(&self, email: &str, password: &str) -> Result<AuthResponse> {
         let url = format!("{}/api/auth/login", self.registry_url);
         let req = AuthRequest {
             email: email.to_string(),
             password: password.to_string(),
         };
-        let payload = serde_json::to_string(&req)?;
 
-        let resp = ureq::post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&payload)
+        let resp = http_client::get_client()
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
             .with_context(|| format!("Failed to authenticate with remote registry at {}", url))?;
 
         if resp.status() != 200 {
-            anyhow::bail!(
-                "Authentication failed with status {}: {}",
-                resp.status(),
-                resp.into_string().unwrap_or_default()
-            );
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Authentication failed with status {}: {}", status, body);
         }
 
-        let result: AuthResponse = resp.into_json()?;
+        let result: AuthResponse = resp.json().await?;
         Ok(result)
     }
 
     /// Sign up for a new registry account.
-    pub fn signup(&self, email: &str, username: &str, password: &str) -> Result<AuthResponse> {
+    pub async fn signup(&self, email: &str, username: &str, password: &str) -> Result<AuthResponse> {
         let url = format!("{}/api/auth/signup", self.registry_url);
         let req = serde_json::json!({
             "email": email,
             "username": username,
             "password": password
         });
-        let payload = serde_json::to_string(&req)?;
 
-        let resp = ureq::post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&payload)
+        let resp = http_client::get_client()
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
             .with_context(|| format!("Failed to sign up for remote registry at {}", url))?;
 
         if resp.status() != 201 {
-            anyhow::bail!(
-                "Signup failed with status {}: {}",
-                resp.status(),
-                resp.into_string().unwrap_or_default()
-            );
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Signup failed with status {}: {}", status, body);
         }
 
-        let result: AuthResponse = resp.into_json()?;
+        let result: AuthResponse = resp.json().await?;
         Ok(result)
     }
 
     /// Download a template archive from the remote registry.
-    pub fn download_template(&self, download_url: &str) -> Result<Vec<u8>> {
-        let resp = ureq::get(download_url)
-            .call()
+    pub async fn download_template(&self, download_url: &str) -> Result<Vec<u8>> {
+        let resp = http_client::get_client()
+            .get(download_url)
+            .send()
+            .await
             .with_context(|| format!("Failed to download template from {}", download_url))?;
 
         if resp.status() != 200 {
@@ -308,14 +312,12 @@ impl RegistryClient {
             );
         }
 
-        let mut reader = resp.into_reader();
-        let mut buffer = Vec::new();
-        std::io::Read::read_to_end(&mut reader, &mut buffer)?;
-        Ok(buffer)
+        let bytes = resp.bytes().await?;
+        Ok(bytes.to_vec())
     }
 
     /// Post a review/rating for a template.
-    pub fn post_review(
+    pub async fn post_review(
         &self,
         template_id: &str,
         rating: u8,
@@ -330,19 +332,19 @@ impl RegistryClient {
             rating,
             comment: comment.map(str::to_string),
         };
-        let payload = serde_json::to_string(&req)?;
+        let client = http_client::get_client();
 
-        let mut request = ureq::post(&url).set("Content-Type", "application/json");
-
-        if let Some(ref token) = self.token {
-            request = request.set("Authorization", &format!("Bearer {}", token));
+        let mut http_req = client.post(&url).json(&req);
+        for (key, value) in self.build_headers() {
+            http_req = http_req.header(&key, &value);
         }
 
-        let resp = request
-            .send_string(&payload)
+        let resp = http_req
+            .send()
+            .await
             .with_context(|| format!("Failed to post review to {}", url))?;
 
-        let result: ReviewResponse = resp.into_json()?;
+        let result: ReviewResponse = resp.json().await?;
         Ok(result)
     }
 }

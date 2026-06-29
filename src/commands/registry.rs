@@ -115,10 +115,10 @@ pub async fn handle(cmd: RegistryCommands) -> Result<()> {
             verified,
             min_quality,
             limit,
-        } => search(query, tags, verified, min_quality, limit),
-        RegistryCommands::Info { name, version } => info(name, version),
-        RegistryCommands::Login { email } => login(email),
-        RegistryCommands::Signup { email, username } => signup(email, username),
+        } => search(query, tags, verified, min_quality, limit).await,
+        RegistryCommands::Info { name, version } => info(name, version).await,
+        RegistryCommands::Login { email } => login(email).await,
+        RegistryCommands::Signup { email, username } => signup(email, username).await,
         RegistryCommands::Logout => logout(),
         RegistryCommands::Publish {
             path,
@@ -140,19 +140,19 @@ pub async fn handle(cmd: RegistryCommands) -> Result<()> {
             license,
             repository,
             homepage,
-        ),
-        RegistryCommands::Install { name, version } => install(name, version),
+        ).await,
+        RegistryCommands::Install { name, version } => install(name, version).await,
         RegistryCommands::Review {
             name,
             rating,
             comment,
-        } => review(name, rating, comment),
+        } => review(name, rating, comment).await,
         RegistryCommands::Status => status(),
         RegistryCommands::Config { url } => config(url),
     }
 }
 
-fn search(
+async fn search(
     query: String,
     tags: Option<String>,
     verified: bool,
@@ -179,7 +179,7 @@ fn search(
         offset: Some(0),
     };
 
-    let resp = client.search(&req)?;
+    let resp = client.search(&req).await?;
 
     if resp.results.is_empty() {
         p::info(&format!("No templates found matching '{}'", query));
@@ -218,7 +218,7 @@ fn search(
     Ok(())
 }
 
-fn info(name: String, version: Option<String>) -> Result<()> {
+async fn info(name: String, version: Option<String>) -> Result<()> {
     p::info(&format!(
         "Fetching template info for '{}'{}",
         name,
@@ -231,7 +231,7 @@ fn info(name: String, version: Option<String>) -> Result<()> {
     let config = registry::load_registry_config()?;
     let client = registry::RegistryClient::new(config.url, config.token);
 
-    let tpl = client.get_template(&name, version.as_deref())?;
+    let tpl = client.get_template(&name, version.as_deref()).await?;
 
     println!();
     println!(
@@ -262,7 +262,7 @@ fn info(name: String, version: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn login(email: Option<String>) -> Result<()> {
+async fn login(email: Option<String>) -> Result<()> {
     let email = email.unwrap_or_else(|| {
         dialoguer::Input::new()
             .with_prompt("Email")
@@ -283,7 +283,7 @@ fn login(email: Option<String>) -> Result<()> {
     let config = registry::load_registry_config()?;
     let client = registry::RegistryClient::new(config.url.clone(), None);
 
-    let resp = client.authenticate(&email, &password)?;
+    let resp = client.authenticate(&email, &password).await?;
 
     if !resp.success {
         anyhow::bail!("Authentication failed: {}", resp.message);
@@ -308,7 +308,7 @@ fn login(email: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn signup(email: Option<String>, username: Option<String>) -> Result<()> {
+async fn signup(email: Option<String>, username: Option<String>) -> Result<()> {
     let email = email.unwrap_or_else(|| {
         dialoguer::Input::new()
             .with_prompt("Email")
@@ -344,7 +344,7 @@ fn signup(email: Option<String>, username: Option<String>) -> Result<()> {
     let config = registry::load_registry_config()?;
     let client = registry::RegistryClient::new(config.url.clone(), None);
 
-    let resp = client.signup(&email, &username, &password)?;
+    let resp = client.signup(&email, &username, &password).await?;
 
     if !resp.success {
         anyhow::bail!("Signup failed: {}", resp.message);
@@ -378,7 +378,7 @@ fn logout() -> Result<()> {
     Ok(())
 }
 
-fn publish(
+async fn publish(
     path: PathBuf,
     name: Option<String>,
     description: Option<String>,
@@ -447,7 +447,7 @@ fn publish(
     p::info("Publishing to remote registry...");
 
     let client = registry::RegistryClient::new(config.url, config.token);
-    let resp = client.publish(&publish_req)?;
+    let resp = client.publish(&publish_req).await?;
 
     if !resp.success {
         anyhow::bail!("Publish failed: {}", resp.message);
@@ -465,7 +465,7 @@ fn publish(
     Ok(())
 }
 
-fn install(name: String, version: Option<String>) -> Result<()> {
+async fn install(name: String, version: Option<String>) -> Result<()> {
     p::info(&format!(
         "Downloading template '{}'{}",
         name,
@@ -478,10 +478,10 @@ fn install(name: String, version: Option<String>) -> Result<()> {
     let config = registry::load_registry_config()?;
     let client = registry::RegistryClient::new(config.url, config.token);
 
-    let tpl = client.get_template(&name, version.as_deref())?;
+    let tpl = client.get_template(&name, version.as_deref()).await?;
 
     // Download archive
-    let archive_bytes = client.download_template(&tpl.download_url)?;
+    let archive_bytes = client.download_template(&tpl.download_url).await?;
 
     // Save to temp and extract
     let temp_dir = std::env::temp_dir().join(format!("starforge-dl-{}", uuid::Uuid::new_v4()));
@@ -505,7 +505,7 @@ fn install(name: String, version: Option<String>) -> Result<()> {
         tpl.version,
         None,
         None,
-    )?;
+    ).await?;
 
     p::success(&format!("Template '{}' installed successfully", name));
 
@@ -515,7 +515,7 @@ fn install(name: String, version: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn review(name: String, rating: u8, comment: Option<String>) -> Result<()> {
+async fn review(name: String, rating: u8, comment: Option<String>) -> Result<()> {
     if !(1..=5).contains(&rating) {
         anyhow::bail!("Rating must be between 1 and 5");
     }
@@ -528,8 +528,8 @@ fn review(name: String, rating: u8, comment: Option<String>) -> Result<()> {
     p::info("Posting review...");
 
     let client = registry::RegistryClient::new(config.url, config.token);
-    let tpl = client.get_template(&name, None)?;
-    let resp = client.post_review(&tpl.id, rating, comment.as_deref())?;
+    let tpl = client.get_template(&name, None).await?;
+    let resp = client.post_review(&tpl.id, rating, comment.as_deref()).await?;
 
     if !resp.success {
         anyhow::bail!("Failed to post review: {}", resp.message);
