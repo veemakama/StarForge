@@ -1,4 +1,6 @@
 pub mod audit;
+pub mod backup;
+pub mod benchmarking;
 pub mod bindings;
 pub mod call_graph;
 pub mod config;
@@ -24,6 +26,7 @@ pub mod profiler;
 pub mod registry;
 pub mod repl;
 pub mod sandbox;
+pub mod scheduler;
 pub mod security;
 pub mod social;
 pub mod soroban;

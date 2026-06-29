@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod backup;
 pub mod benchmark;
 pub mod command_tree;
 pub mod completions;
@@ -23,6 +24,7 @@ pub mod orchestrate;
 pub mod perf;
 pub mod plugin;
 pub mod registry;
+pub mod schedule;
 pub mod security;
 pub mod shell;
 pub mod social;

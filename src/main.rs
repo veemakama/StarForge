@@ -91,8 +91,9 @@ enum Commands {
     #[command(subcommand)]
     Tutorial(commands::tutorial::TutorialCommands),
 
-    /// Performance benchmarking utilities
-    Benchmark(commands::benchmark::BenchmarkArgs),
+    /// Performance benchmarking utilities and industry-standard comparisons
+    #[command(subcommand)]
+    Benchmark(commands::benchmark::BenchmarkCommands),
 
     /// Contract testing utilities for Soroban wasm
     Test(commands::test::TestArgs),
@@ -127,6 +128,14 @@ enum Commands {
     /// Security hardening, validation, and monitoring
     #[command(subcommand)]
     Security(commands::security::SecurityCommands),
+
+    /// Schedule deployments for future execution with approval workflows
+    #[command(subcommand)]
+    Schedule(commands::schedule::ScheduleCommands),
+
+    /// Backup and disaster recovery for contract state and code
+    #[command(subcommand)]
+    Backup(commands::backup::BackupCommands),
 
     /// Static analysis and linting for Soroban contracts
     Lint(commands::lint::LintArgs),
@@ -197,6 +206,8 @@ async fn main() {
         Commands::Upgrade(_) => "upgrade",
         Commands::Orchestrate(_) => "orchestrate",
         Commands::Security(_) => "security",
+        Commands::Schedule(_) => "schedule",
+        Commands::Backup(_) => "backup",
         Commands::Lint(_) => "lint",
         Commands::Diagnostics(_) => "diagnostics",
         Commands::TemplateVcs(_) => "template-vcs",
@@ -235,6 +246,8 @@ async fn main() {
         Commands::Upgrade(cmd) => commands::upgrade::handle(cmd).await,
         Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd).await,
         Commands::Security(cmd) => commands::security::handle(cmd).await,
+        Commands::Schedule(cmd) => commands::schedule::handle(cmd).await,
+        Commands::Backup(cmd) => commands::backup::handle(cmd).await,
         Commands::Lint(args) => commands::lint::handle(args).await,
         Commands::Diagnostics(args) => commands::diagnostics::handle(args).await,
         Commands::TemplateVcs(cmd) => commands::template_vcs::handle(cmd).await,
