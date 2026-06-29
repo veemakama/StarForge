@@ -59,6 +59,19 @@ fn analyze(wasm: PathBuf, network: Option<String>) -> Result<()> {
     p::kv_accent("Size (bytes)", &report.size_bytes.to_string());
     p::kv("SHA256", &report.sha256);
     p::kv("Heuristic score", &report.score.to_string());
+    p::kv("Risk", &format!("{:?}", report.risk));
+    p::kv(
+        "Estimated CPU",
+        &format!("{} instructions", report.gas.cpu_instructions),
+    );
+    p::kv("Estimated memory", &format!("{} bytes", report.gas.memory_bytes));
+    p::kv("Estimated storage", &format!("{} bytes", report.gas.storage_bytes));
+    p::kv("Estimated fee", &format!("{} stroops", report.gas.fee_stroops));
+    p::kv("Host calls", &report.resources.host_calls.to_string());
+    p::kv(
+        "Control flow ops",
+        &report.resources.control_flow_ops.to_string(),
+    );
     if !report.suggestions.is_empty() {
         println!();
         p::info("Suggestions:");
@@ -112,39 +125,49 @@ fn diff(old_wasm: PathBuf, new_wasm: PathBuf) -> Result<()> {
     profile.mark("analyze_old");
     let new_report = optimizer::analyze_wasm(&new_wasm)?;
     profile.mark("analyze_new");
-
-    let old_est = estimate_simulation_cost(old_report.size_bytes);
-    let new_est = estimate_simulation_cost(new_report.size_bytes);
-    let delta = new_est as i64 - old_est as i64;
-    let pct = if old_est == 0 {
-        0.0
-    } else {
-        (delta as f64 / old_est as f64) * 100.0
-    };
+    let comparison = optimizer::compare_gas_reports(&old_report, &new_report);
 
     println!();
     p::separator();
     p::kv("Old size (bytes)", &old_report.size_bytes.to_string());
     p::kv("New size (bytes)", &new_report.size_bytes.to_string());
-    p::kv("Old est. sim cost", &old_est.to_string());
-    p::kv("New est. sim cost", &new_est.to_string());
+    p::kv(
+        "Old est. fee",
+        &comparison.baseline_fee_stroops.to_string(),
+    );
+    p::kv(
+        "New est. fee",
+        &comparison.candidate_fee_stroops.to_string(),
+    );
+    p::kv(
+        "Old est. CPU",
+        &old_report.gas.cpu_instructions.to_string(),
+    );
+    p::kv(
+        "New est. CPU",
+        &new_report.gas.cpu_instructions.to_string(),
+    );
+    p::kv("Old risk", &format!("{:?}", old_report.risk));
+    p::kv("New risk", &format!("{:?}", new_report.risk));
     p::kv(
         "Estimated delta",
         &format!(
             "{} ({:+.2}%)",
-            if delta >= 0 {
-                format!("+{}", delta)
+            if comparison.delta_stroops >= 0 {
+                format!("+{}", comparison.delta_stroops)
             } else {
-                delta.to_string()
+                comparison.delta_stroops.to_string()
             },
-            pct
+            comparison.delta_percent
         ),
     );
     p::kv(
         "Result",
-        if delta < 0 {
+        if comparison.delta_stroops < 0 {
             "Improved (lower estimated cost)"
-        } else if delta > 0 {
+        } else if comparison.regression {
+            "Regressed (estimated fee increased by more than 5%)"
+        } else if comparison.delta_stroops > 0 {
             "Regressed (higher estimated cost)"
         } else {
             "No change"
@@ -160,8 +183,4 @@ fn diff(old_wasm: PathBuf, new_wasm: PathBuf) -> Result<()> {
     p::separator();
 
     Ok(())
-}
-
-fn estimate_simulation_cost(size_bytes: usize) -> u64 {
-    2_000 + (size_bytes as u64 / 8)
 }
