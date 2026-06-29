@@ -118,6 +118,39 @@ pub struct TemplateEntry {
     pub homepage: Option<String>,
     #[serde(default)]
     pub documentation: Option<String>,
+    /// Security review metadata for the template.
+    #[serde(default)]
+    pub security_review: Option<SecurityReview>,
+    /// Version history / changelog entries (newest first).
+    #[serde(default)]
+    pub changelog: Vec<ChangelogEntry>,
+}
+
+/// Security review status and results for a template.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecurityReview {
+    /// Audit status: "audited", "pending", or "not-reviewed".
+    pub status: String,
+    /// ISO-8601 timestamp of the most recent audit. `None` if not yet audited.
+    #[serde(default)]
+    pub audited_at: Option<String>,
+    /// Name of the auditing entity. `None` if not yet audited.
+    #[serde(default)]
+    pub auditor: Option<String>,
+    /// Number of findings identified. `None` if not yet audited.
+    #[serde(default)]
+    pub findings: Option<u32>,
+    /// Audit score out of 100. `None` if not yet audited.
+    #[serde(default)]
+    pub score: Option<f64>,
+}
+
+/// A single changelog entry describing what changed in a version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangelogEntry {
+    pub version: String,
+    pub date: String,
+    pub notes: String,
 }
 
 /// Outcome of a template-vs-CLI compatibility check.

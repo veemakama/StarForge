@@ -1,34 +1,42 @@
 {
   "type": "object",
-  "required": [
-    "name",
-    "version",
-    "description",
-    "author",
-    "tags",
-    "source"
-  ],
+  "required": ["name", "version", "description", "author", "tags", "source"],
   "properties": {
-    "name": {
-      "type": "string"
-    },
-    "version": {
-      "type": "string"
-    },
-    "description": {
-      "type": "string"
-    },
-    "author": {
-      "type": "string"
-    },
-    "tags": {
-      "type": "array",
-      "items": {
-        "type": "string"
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "source": { "type": "object" },
+    "license": { "type": "string" },
+    "repository": { "type": "string" },
+    "homepage": { "type": "string" },
+    "documentation": { "type": "string" },
+    "verified": { "type": "boolean" },
+    "documented": { "type": "boolean" },
+    "maintenance": { "type": "string", "enum": ["active", "maintained", "deprecated", "unknown"] },
+    "security_review": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["audited", "pending", "not-reviewed"] },
+        "audited_at": { "type": ["string", "null"] },
+        "auditor": { "type": ["string", "null"] },
+        "findings": { "type": ["integer", "null"] },
+        "score": { "type": ["number", "null"] }
       }
     },
-    "source": {
-      "type": "object"
+    "changelog": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["version", "date", "notes"],
+        "properties": {
+          "version": { "type": "string" },
+          "date": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
     }
   }
 }
