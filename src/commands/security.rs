@@ -1,13 +1,15 @@
 use crate::utils::print as p;
 use crate::utils::security::{
     apply_hardening, default_rules, evaluate_event, format_report, generate_hardening_report,
-    run_audit, run_checklist, validate_security, write_report, AnomalyDetector, AuditConfig,
-    HardeningOptions, IncidentResponse, IncidentStore, ThreatFeed,
+    run_audit, run_checklist, run_pentest, track_findings, validate_security, write_report,
+    AnomalyDetector, AuditConfig, HardeningOptions, IncidentResponse, IncidentStore,
+    RemediationStatus, ThreatFeed,
 };
 use crate::utils::stream::{EventStreamFilters, SorobanEventStream};
 use crate::utils::{config, notifications, soroban};
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use colored::Colorize;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{
@@ -31,6 +33,10 @@ pub enum SecurityCommands {
     Incident(IncidentArgs),
     /// Run full security audit with external tools (Slither, Mythril) and built-in analysis
     Audit(AuditArgs),
+    /// Run simulated penetration test cases against contract source
+    Pentest(PentestArgs),
+    /// Track remediation of findings from audit/pentest/checklist runs
+    Remediation(RemediationArgs),
 }
 
 #[derive(Args)]
@@ -112,6 +118,47 @@ pub struct IncidentArgs {
     pub command: IncidentCommands,
 }
 
+#[derive(Args)]
+pub struct PentestArgs {
+    /// Path to Soroban contract source (.rs)
+    pub path: PathBuf,
+    /// Output format: text or json
+    #[arg(long, default_value = "text")]
+    pub format: String,
+    /// Automatically create remediation tracking items for exploited cases
+    #[arg(long, default_value_t = true)]
+    pub track: bool,
+}
+
+#[derive(Subcommand)]
+pub enum RemediationCommands {
+    /// List tracked remediation items
+    List {
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Assign a remediation item to someone
+    Assign {
+        id: String,
+        #[arg(long)]
+        to: String,
+    },
+    /// Update the status of a remediation item
+    Status {
+        id: String,
+        /// New status: open, in-progress, resolved, verified, wont-fix
+        status: String,
+    },
+    /// Add a note to a remediation item
+    Note { id: String, note: String },
+}
+
+#[derive(Args)]
+pub struct RemediationArgs {
+    #[command(subcommand)]
+    pub command: RemediationCommands,
+}
+
 pub async fn handle(cmd: SecurityCommands) -> Result<()> {
     match cmd {
         SecurityCommands::Harden(args) => handle_harden(args),
@@ -121,6 +168,8 @@ pub async fn handle(cmd: SecurityCommands) -> Result<()> {
         SecurityCommands::Monitor(args) => handle_monitor(args),
         SecurityCommands::Incident(args) => handle_incident(args),
         SecurityCommands::Audit(args) => handle_audit(args),
+        SecurityCommands::Pentest(args) => handle_pentest(args),
+        SecurityCommands::Remediation(args) => handle_remediation(args),
     }
 }
 
@@ -413,4 +462,129 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
 
     p::success("Security audit complete");
     Ok(())
+}
+
+fn handle_pentest(args: PentestArgs) -> Result<()> {
+    config::validate_file_path(&args.path, Some("rs"))?;
+    p::header("Penetration Test Simulation");
+    p::kv("Contract", &args.path.display().to_string());
+
+    let report = run_pentest(&args.path)?;
+
+    if args.track {
+        let findings: Vec<_> = report
+            .results
+            .iter()
+            .filter(|r| r.exploited)
+            .map(|r| {
+                (
+                    r.name.clone(),
+                    r.severity.clone(),
+                    r.evidence.clone(),
+                    r.remediation.clone(),
+                )
+            })
+            .collect();
+        let created = track_findings("pentest", &findings)?;
+        if !created.is_empty() {
+            p::info(&format!(
+                "Created {} new remediation item(s)",
+                created.len()
+            ));
+        }
+    }
+
+    if args.format == "json" {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    p::separator();
+    p::kv("Cases run", &report.cases_run.to_string());
+    p::kv("Cases exploited", &report.cases_exploited.to_string());
+    p::kv("Security score", &format!("{:.1}/100", report.score));
+    println!();
+
+    for r in &report.results {
+        let icon = if r.exploited { "✗".red() } else { "✓".green() };
+        println!(
+            "  {} [{}] {} ({})",
+            icon,
+            r.severity.to_uppercase(),
+            r.name,
+            r.id
+        );
+        println!("      Attack vector: {}", r.attack_vector);
+        if r.exploited {
+            println!("      Evidence: {}", r.evidence);
+            println!("      Remediation: {}", r.remediation);
+        }
+    }
+
+    p::separator();
+    if report.cases_exploited == 0 {
+        p::success("No exploitable findings from simulated penetration tests");
+    } else {
+        p::warn(&format!(
+            "{} simulated attack(s) succeeded — see remediation items",
+            report.cases_exploited
+        ));
+    }
+    Ok(())
+}
+
+fn handle_remediation(args: RemediationArgs) -> Result<()> {
+    match args.command {
+        RemediationCommands::List { status } => {
+            p::header("Remediation Tracker");
+            let mut items = crate::utils::security::remediation::load_all()?;
+            if let Some(status) = &status {
+                items.retain(|i| i.status.to_string() == *status);
+            }
+            if items.is_empty() {
+                p::info("No remediation items recorded.");
+                return Ok(());
+            }
+            for item in &items {
+                println!(
+                    "  {} [{}] {} — {} ({})",
+                    &item.id[..8.min(item.id.len())].cyan(),
+                    item.severity.to_uppercase(),
+                    item.title,
+                    item.status,
+                    item.source,
+                );
+                if let Some(assignee) = &item.assignee {
+                    println!("      Assigned to: {}", assignee);
+                }
+            }
+            Ok(())
+        }
+        RemediationCommands::Assign { id, to } => {
+            let item = crate::utils::security::remediation::assign(&id, &to)?;
+            p::success(&format!("Assigned '{}' to {}", item.title, to));
+            Ok(())
+        }
+        RemediationCommands::Status { id, status } => {
+            let parsed = match status.as_str() {
+                "open" => RemediationStatus::Open,
+                "in-progress" => RemediationStatus::InProgress,
+                "resolved" => RemediationStatus::Resolved,
+                "verified" => RemediationStatus::Verified,
+                "wont-fix" => RemediationStatus::WontFix,
+                other => anyhow::bail!(
+                    "Unknown status '{}'. Use one of: open, in-progress, resolved, verified, wont-fix",
+                    other
+                ),
+            };
+            let item = crate::utils::security::remediation::update_status(&id, parsed)?;
+            p::success(&format!("'{}' is now {}", item.title, item.status));
+            Ok(())
+        }
+        RemediationCommands::Note { id, note } => {
+            let item = crate::utils::security::remediation::add_note(&id, &note)?;
+            p::success(&format!("Note added to '{}'", item.title));
+            Ok(())
+        }
+    }
 }
