@@ -89,6 +89,10 @@ criterion = "0.5.1"
 tempfile = "3.8"
 mockito = "1.2"
 wasm-bindgen-test = "0.3"
+# Property-based testing
+proptest = "1.4"
+# Arbitrary trait for structured fuzzing
+arbitrary = { version = "1.3", features = ["derive"] }
 
 [[bench]]
 name = "benchmarks"
