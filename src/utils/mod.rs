@@ -1,5 +1,6 @@
+pub mod approval_engine;
 pub mod audit;
-pub mod gas_report;
+pub mod compliance;
 pub mod backup;
 pub mod bridge;
 pub mod benchmarking;

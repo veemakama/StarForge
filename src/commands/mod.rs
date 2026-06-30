@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod approval;
 pub mod backup;
 pub mod bridge;
 pub mod benchmark;
