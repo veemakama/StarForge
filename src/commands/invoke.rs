@@ -99,7 +99,9 @@ pub async fn handle(args: InvokeArgs) -> Result<()> {
         &arg_type_list,
         network,
         submit_wallet.map(|w| w as &crate::utils::config::WalletEntry),
-    ).await?;
+        None,
+    )
+    .await?;
 
     println!();
     p::success("Simulation successful!");

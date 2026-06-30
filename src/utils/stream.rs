@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::Deserialize;
-use std::thread;
 use std::time::Duration;
 use stellar_xdr::curr::{Limited, Limits, ScSymbol, ScVal, WriteXdr};
 
@@ -12,6 +13,14 @@ pub struct EventStreamFilters {
     pub topic_segments: Option<Vec<String>>,
     pub value_match: Option<String>,
 }
+
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(10)
+        .build()
+        .expect("Failed to create Soroban event stream client")
+});
 
 #[derive(Debug, Clone)]
 pub struct SorobanEventStream {
@@ -90,7 +99,7 @@ impl SorobanEventStream {
         self
     }
 
-    pub fn next_batch(&mut self) -> Result<Vec<SorobanEvent>> {
+    pub async fn next_batch(&mut self) -> Result<Vec<SorobanEvent>> {
         let filter = self.build_rpc_filter();
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -99,17 +108,20 @@ impl SorobanEventStream {
             "params": {
                 "filters": [filter],
                 "pagination": {
-                    "cursor": self.cursor,
+                    "cursor": self.cursor.clone(),
                     "limit": 10
                 }
             }
         });
 
-        let response: SorobanGetEventsResponse = ureq::post(&self.rpc_url)
-            .set("Content-Type", "application/json")
-            .send_json(&request)
+        let response: SorobanGetEventsResponse = HTTP_CLIENT
+            .post(&self.rpc_url)
+            .json(&request)
+            .send()
+            .await
             .with_context(|| format!("Soroban RPC request to {} failed", self.rpc_url))?
-            .into_json()
+            .json::<SorobanGetEventsResponse>()
+            .await
             .with_context(|| "Failed to decode Soroban getEvents response")?;
 
         if let Some(error) = response.error {
@@ -138,12 +150,12 @@ impl SorobanEventStream {
         Ok(events)
     }
 
-    pub fn sleep(&self) {
-        thread::sleep(self.poll_interval);
+    pub async fn sleep(&self) {
+        tokio::time::sleep(self.poll_interval).await;
     }
 
-    pub fn sleep_backoff(&mut self) {
-        thread::sleep(self.backoff.next_delay());
+    pub async fn sleep_backoff(&mut self) {
+        tokio::time::sleep(self.backoff.next_delay()).await;
     }
 
     fn build_rpc_filter(&self) -> serde_json::Value {

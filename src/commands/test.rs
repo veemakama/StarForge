@@ -9,6 +9,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub wasm: PathBuf,
 
+    /// JSON/TOML contract testing fixture with mocks, scenarios, and assertions
+    #[arg(long)]
+    pub fixture: Option<PathBuf>,
+
     /// Path to contract source for generation/coverage
     #[arg(long)]
     pub source: Option<PathBuf>,
@@ -33,6 +37,38 @@ pub struct TestArgs {
     #[arg(long, default_value = "false")]
     pub coverage: bool,
 
+    /// Write a dedicated coverage report to this path
+    #[arg(long)]
+    pub coverage_out: Option<PathBuf>,
+
+    /// Dedicated coverage report format (html, json, markdown, text)
+    #[arg(long, default_value = "html")]
+    pub coverage_format: String,
+
+    /// Minimum overall coverage percentage required by --coverage-ci
+    #[arg(long)]
+    pub coverage_goal: Option<f64>,
+
+    /// Minimum function coverage percentage required by --coverage-ci
+    #[arg(long)]
+    pub function_coverage_goal: Option<f64>,
+
+    /// Minimum line coverage percentage required by --coverage-ci
+    #[arg(long)]
+    pub line_coverage_goal: Option<f64>,
+
+    /// Minimum branch coverage percentage required by --coverage-ci
+    #[arg(long)]
+    pub branch_coverage_goal: Option<f64>,
+
+    /// Fail the command when configured coverage goals are not met
+    #[arg(long, default_value = "false")]
+    pub coverage_ci: bool,
+
+    /// Generate a GitHub Actions workflow for contract coverage checks
+    #[arg(long)]
+    pub coverage_ci_workflow_out: Option<PathBuf>,
+
     /// Auto-generate test cases from source
     #[arg(long, default_value = "false")]
     pub generate: bool,
@@ -52,22 +88,75 @@ pub struct TestArgs {
     /// Path to contract source directory for test generation
     #[arg(long)]
     pub contract_path: Option<PathBuf>,
+
+    /// Verify Soroban testnet integration for this run
+    #[arg(long, default_value = "false")]
+    pub testnet: bool,
+
+    /// Network used by --testnet
+    #[arg(long, default_value = "testnet")]
+    pub network: String,
+
+    /// Deployed contract ID used by --testnet checks
+    #[arg(long)]
+    pub contract_id: Option<String>,
+
+    /// Skip the live RPC health probe while still validating testnet wiring
+    #[arg(long, default_value = "false")]
+    pub testnet_dry_run: bool,
+
+    /// Disable the Soroban RPC health probe during --testnet
+    #[arg(long, default_value = "false")]
+    pub skip_rpc_health: bool,
 }
 
 pub async fn handle(args: TestArgs) -> Result<()> {
+    let coverage_goals = build_coverage_goals(&args)?;
+    let coverage_requested = args.coverage
+        || args.coverage_out.is_some()
+        || args.coverage_ci
+        || coverage_goals.has_goals();
+
     config::validate_file_path(&args.wasm, Some("wasm"))?;
-    if args.coverage && args.source.is_none() {
-        anyhow::bail!("--coverage requires --source");
+    if let Some(fixture) = &args.fixture {
+        config::validate_file_path(fixture, None)?;
+    }
+    if let Some(contract_id) = &args.contract_id {
+        config::validate_contract_id(contract_id)?;
+    }
+    if coverage_requested && args.source.is_none() {
+        anyhow::bail!("coverage analysis requires --source");
     }
     if args.generate && args.source.is_none() {
         anyhow::bail!("--generate requires --source");
     }
+    if args.coverage_ci_workflow_out.is_some() && args.source.is_none() {
+        anyhow::bail!("--coverage-ci-workflow-out requires --source");
+    }
+
+    if let Some(workflow_out) = &args.coverage_ci_workflow_out {
+        let source = args.source.as_ref().expect("source checked above");
+        let path = test_coverage::write_coverage_ci_workflow(
+            workflow_out,
+            &args.wasm,
+            source,
+            &coverage_goals,
+        )?;
+        p::kv("Coverage CI workflow", &path.display().to_string());
+    }
 
     p::header("Contract Test Runner");
     p::kv("Wasm", &args.wasm.display().to_string());
-    p::kv("Coverage", if args.coverage { "yes" } else { "no" });
+    p::kv("Coverage", if coverage_requested { "yes" } else { "no" });
     p::kv("Generate", if args.generate { "yes" } else { "no" });
     p::kv("Parallel", if args.parallel { "yes" } else { "no" });
+    if let Some(fixture) = &args.fixture {
+        p::kv("Fixture", &fixture.display().to_string());
+    }
+    if args.testnet {
+        p::kv("Testnet integration", "yes");
+        p::kv("Network", &args.network);
+    }
     if let Some(r) = &args.report {
         p::kv("Report", r);
     }
@@ -139,6 +228,34 @@ pub async fn handle(args: TestArgs) -> Result<()> {
         }
 
         p::success("Rollback safety checks passed");
+        return Ok(());
+    }
+
+    if let Some(fixture) = &args.fixture {
+        let mut report = contract_testing::run_contract_framework(
+            &args.wasm,
+            fixture,
+            contract_testing::FrameworkRunOptions {
+                coverage: coverage_requested,
+                report_format: args.report.clone(),
+                source: args.source.clone(),
+                testnet: build_testnet_config(&args),
+            },
+        )
+        .await?;
+
+        let coverage_goals_passed =
+            handle_coverage_outputs(report.coverage.as_mut(), &args, &coverage_goals)?;
+        print_framework_report(&report);
+
+        if report.failures > 0 {
+            anyhow::bail!("Some contract framework tests failed");
+        }
+        if args.coverage_ci && !coverage_goals_passed {
+            anyhow::bail!("Coverage goals were not met");
+        }
+
+        p::success("All contract framework tests passed");
         return Ok(());
     }
 
@@ -231,10 +348,10 @@ pub async fn handle(args: TestArgs) -> Result<()> {
     }
 
     // Fall back to original test runner
-    let result = test_runner::run_contract_tests(
+    let mut result = test_runner::run_contract_tests(
         &args.wasm,
         test_runner::TestOptions {
-            coverage: args.coverage,
+            coverage: coverage_requested,
             report_format: args.report.clone(),
             parallel: args.parallel,
             generate: args.generate,
@@ -242,6 +359,8 @@ pub async fn handle(args: TestArgs) -> Result<()> {
             workers: args.workers,
         },
     )?;
+    let coverage_goals_passed =
+        handle_coverage_outputs(result.coverage.as_mut(), &args, &coverage_goals)?;
 
     println!();
     p::separator();
@@ -252,13 +371,28 @@ pub async fn handle(args: TestArgs) -> Result<()> {
     p::kv("Generated cases", &result.generated_cases.len().to_string());
 
     if let Some(cov) = &result.coverage {
-        p::kv("Coverage", &format!("{:.1}%", cov.coverage_percent));
+        print_coverage_summary(cov);
     }
     if let Some(path) = &result.report_path {
         p::kv("Report path", &path.display().to_string());
     }
     if let Some(path) = &result.dashboard_path {
         p::kv("Dashboard", &path.display().to_string());
+    }
+
+    if args.testnet {
+        let status = contract_testing::verify_testnet_integration(
+            build_testnet_config(&args).expect("testnet config available"),
+        )
+        .await?;
+        println!();
+        p::header("Testnet Integration");
+        p::kv("Network", &status.network);
+        p::kv("RPC", &status.rpc_url);
+        p::kv("RPC healthy", if status.rpc_healthy { "yes" } else { "no" });
+        for check in &status.checks {
+            p::info(check);
+        }
     }
 
     if !result.failure_analysis.is_empty() {
@@ -274,7 +408,142 @@ pub async fn handle(args: TestArgs) -> Result<()> {
     if result.failures > 0 {
         anyhow::bail!("Some contract tests failed");
     }
+    if args.coverage_ci && !coverage_goals_passed {
+        anyhow::bail!("Coverage goals were not met");
+    }
 
     p::success("All contract tests passed");
     Ok(())
+}
+
+fn build_coverage_goals(args: &TestArgs) -> Result<test_coverage::CoverageGoals> {
+    Ok(test_coverage::CoverageGoals {
+        min_overall: validate_coverage_goal("--coverage-goal", args.coverage_goal)?,
+        min_functions: validate_coverage_goal(
+            "--function-coverage-goal",
+            args.function_coverage_goal,
+        )?,
+        min_lines: validate_coverage_goal("--line-coverage-goal", args.line_coverage_goal)?,
+        min_branches: validate_coverage_goal("--branch-coverage-goal", args.branch_coverage_goal)?,
+    })
+}
+
+fn validate_coverage_goal(name: &str, value: Option<f64>) -> Result<Option<f64>> {
+    if let Some(value) = value {
+        if !(0.0..=100.0).contains(&value) {
+            anyhow::bail!("{} must be between 0 and 100", name);
+        }
+    }
+    Ok(value)
+}
+
+fn handle_coverage_outputs(
+    coverage: Option<&mut test_coverage::CoverageReport>,
+    args: &TestArgs,
+    goals: &test_coverage::CoverageGoals,
+) -> Result<bool> {
+    let Some(coverage) = coverage else {
+        if args.coverage_out.is_some() || args.coverage_ci || goals.has_goals() {
+            anyhow::bail!("Coverage was requested, but no coverage data was produced");
+        }
+        return Ok(true);
+    };
+
+    let mut goals_passed = true;
+    if goals.has_goals() {
+        let goal_result = test_coverage::apply_coverage_goals(coverage, goals.clone());
+        goals_passed = goal_result.passed;
+        p::kv(
+            "Coverage goals",
+            if goal_result.passed {
+                "passed"
+            } else {
+                "failed"
+            },
+        );
+        for violation in &goal_result.violations {
+            p::warn(violation);
+        }
+    }
+
+    if let Some(output) = &args.coverage_out {
+        let path = test_coverage::write_coverage_report(coverage, &args.coverage_format, output)?;
+        p::kv("Coverage report", &path.display().to_string());
+    }
+
+    Ok(goals_passed)
+}
+
+fn print_coverage_summary(cov: &test_coverage::CoverageReport) {
+    p::kv("Coverage", &format!("{:.1}%", cov.coverage_percent));
+    p::kv(
+        "Function coverage",
+        &format!(
+            "{:.1}% ({}/{})",
+            cov.function_coverage_percent, cov.functions_covered, cov.functions_total
+        ),
+    );
+    p::kv(
+        "Line coverage",
+        &format!(
+            "{:.1}% ({}/{})",
+            cov.line_coverage_percent, cov.lines_covered, cov.lines_total
+        ),
+    );
+    p::kv(
+        "Branch coverage",
+        &format!(
+            "{:.1}% ({}/{})",
+            cov.branch_coverage_percent, cov.branches_covered, cov.branches_total
+        ),
+    );
+    if !cov.uncovered_functions.is_empty() {
+        p::warn(&format!(
+            "Uncovered functions: {}",
+            cov.uncovered_functions.join(", ")
+        ));
+    }
+}
+
+fn build_testnet_config(args: &TestArgs) -> Option<contract_testing::TestnetIntegrationConfig> {
+    args.testnet
+        .then(|| contract_testing::TestnetIntegrationConfig {
+            network: args.network.clone(),
+            contract_id: args.contract_id.clone(),
+            verify_rpc_health: !args.skip_rpc_health,
+            dry_run: args.testnet_dry_run,
+        })
+}
+
+fn print_framework_report(report: &contract_testing::ContractFrameworkReport) {
+    println!();
+    p::separator();
+    p::kv_accent("SHA256", &report.wasm_sha256);
+    p::kv("Suite", &report.suite_name);
+    p::kv("Wasm bytes", &report.size_bytes.to_string());
+    p::kv("Fixtures", &report.fixtures_loaded.to_string());
+    p::kv("Mocks", &report.mocks_available.to_string());
+    p::kv("Cases executed", &report.cases_executed.to_string());
+    p::kv("Failures", &report.failures.to_string());
+
+    if let Some(coverage) = &report.coverage {
+        print_coverage_summary(coverage);
+    }
+    if let Some(path) = &report.report_path {
+        p::kv("Report path", &path.display().to_string());
+    }
+    if let Some(status) = &report.testnet {
+        p::kv("Testnet RPC", &status.rpc_url);
+        p::kv("RPC healthy", if status.rpc_healthy { "yes" } else { "no" });
+    }
+
+    for case in &report.cases {
+        let status = if case.passed { "PASS" } else { "FAIL" };
+        p::kv(&format!("Case {}", case.name), status);
+        for error in &case.errors {
+            p::warn(error);
+        }
+    }
+
+    p::separator();
 }
