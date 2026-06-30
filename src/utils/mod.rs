@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod gas_report;
 pub mod backup;
 pub mod benchmarking;
 pub mod bindings;

@@ -1,4 +1,8 @@
-use crate::utils::{config, optimizer, print as p, profiler};
+use crate::utils::{
+    config,
+    gas_report::{self, ReportFormat},
+    optimizer, print as p, profiler,
+};
 use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
@@ -12,6 +16,12 @@ pub enum GasCommands {
         /// Network context (used for fee heuristics)
         #[arg(long)]
         network: Option<String>,
+        /// Report format: text, json, or html
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Write the report to this file (required for json/html)
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Emit an "optimized" wasm (lightweight, heuristic-based)
     Optimize {
@@ -28,32 +38,77 @@ pub enum GasCommands {
         old_wasm: PathBuf,
         /// Path to the candidate wasm
         new_wasm: PathBuf,
+        /// Report format: text, json, or html
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Write the report to this file (required for json/html)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Run the gas analyzer over every .wasm file in a directory (benchmarking suite)
+    Benchmark {
+        /// Directory containing .wasm files to benchmark
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Output as JSON instead of a table
+        #[arg(long)]
+        json: bool,
     },
 }
 
 pub async fn handle(cmd: GasCommands) -> Result<()> {
     match cmd {
-        GasCommands::Analyze { wasm, network } => analyze(wasm, network),
+        GasCommands::Analyze {
+            wasm,
+            network,
+            format,
+            output,
+        } => analyze(wasm, network, format, output),
         GasCommands::Optimize { target, output } => optimize(target, output),
-        GasCommands::Diff { old_wasm, new_wasm } => diff(old_wasm, new_wasm),
+        GasCommands::Diff {
+            old_wasm,
+            new_wasm,
+            format,
+            output,
+        } => diff(old_wasm, new_wasm, format, output),
+        GasCommands::Benchmark { dir, json } => benchmark(dir, json),
     }
 }
 
-fn analyze(wasm: PathBuf, network: Option<String>) -> Result<()> {
+fn analyze(
+    wasm: PathBuf,
+    network: Option<String>,
+    format: String,
+    output: Option<PathBuf>,
+) -> Result<()> {
     config::validate_file_path(&wasm, Some("wasm"))?;
 
     let cfg = config::load()?;
     let network = network.unwrap_or(cfg.network);
     config::validate_network(&network)?;
 
-    p::header("Gas Analyzer");
-    p::kv("Network", &network);
-    p::kv("Wasm", &wasm.display().to_string());
+    let report_format = ReportFormat::parse(&format)?;
+    let label = wasm
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| wasm.display().to_string());
 
     let t = profiler::Timer::start();
     let report = optimizer::analyze_wasm(&wasm)?;
     let elapsed = t.elapsed();
 
+    if matches!(report_format, ReportFormat::Json | ReportFormat::Html) {
+        let out = output.ok_or_else(|| {
+            anyhow::anyhow!("--output <path> is required when --format is json or html")
+        })?;
+        gas_report::write_report(&report, &label, report_format, &out)?;
+        p::success(&format!("Report written to {}", out.display()));
+        return Ok(());
+    }
+
+    p::header("Gas Analyzer");
+    p::kv("Network", &network);
+    p::kv("Wasm", &wasm.display().to_string());
     println!();
     p::separator();
     p::kv_accent("Size (bytes)", &report.size_bytes.to_string());
@@ -112,13 +167,24 @@ fn optimize(target: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn diff(old_wasm: PathBuf, new_wasm: PathBuf) -> Result<()> {
+fn diff(
+    old_wasm: PathBuf,
+    new_wasm: PathBuf,
+    format: String,
+    output: Option<PathBuf>,
+) -> Result<()> {
     config::validate_file_path(&old_wasm, Some("wasm"))?;
     config::validate_file_path(&new_wasm, Some("wasm"))?;
 
-    p::header("Gas Diff");
-    p::kv("Old wasm", &old_wasm.display().to_string());
-    p::kv("New wasm", &new_wasm.display().to_string());
+    let report_format = ReportFormat::parse(&format)?;
+    let old_label = old_wasm
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| old_wasm.display().to_string());
+    let new_label = new_wasm
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| new_wasm.display().to_string());
 
     let mut profile = profiler::Profiler::start();
     let old_report = optimizer::analyze_wasm(&old_wasm)?;
@@ -127,26 +193,34 @@ fn diff(old_wasm: PathBuf, new_wasm: PathBuf) -> Result<()> {
     profile.mark("analyze_new");
     let comparison = optimizer::compare_gas_reports(&old_report, &new_report);
 
+    if matches!(report_format, ReportFormat::Json | ReportFormat::Html) {
+        let out = output.ok_or_else(|| {
+            anyhow::anyhow!("--output <path> is required when --format is json or html")
+        })?;
+        gas_report::write_diff_report(
+            &old_label,
+            &old_report,
+            &new_label,
+            &new_report,
+            &comparison,
+            report_format,
+            &out,
+        )?;
+        p::success(&format!("Diff report written to {}", out.display()));
+        return Ok(());
+    }
+
+    p::header("Gas Diff");
+    p::kv("Old wasm", &old_wasm.display().to_string());
+    p::kv("New wasm", &new_wasm.display().to_string());
     println!();
     p::separator();
     p::kv("Old size (bytes)", &old_report.size_bytes.to_string());
     p::kv("New size (bytes)", &new_report.size_bytes.to_string());
-    p::kv(
-        "Old est. fee",
-        &comparison.baseline_fee_stroops.to_string(),
-    );
-    p::kv(
-        "New est. fee",
-        &comparison.candidate_fee_stroops.to_string(),
-    );
-    p::kv(
-        "Old est. CPU",
-        &old_report.gas.cpu_instructions.to_string(),
-    );
-    p::kv(
-        "New est. CPU",
-        &new_report.gas.cpu_instructions.to_string(),
-    );
+    p::kv("Old est. fee", &comparison.baseline_fee_stroops.to_string());
+    p::kv("New est. fee", &comparison.candidate_fee_stroops.to_string());
+    p::kv("Old est. CPU", &old_report.gas.cpu_instructions.to_string());
+    p::kv("New est. CPU", &new_report.gas.cpu_instructions.to_string());
     p::kv("Old risk", &format!("{:?}", old_report.risk));
     p::kv("New risk", &format!("{:?}", new_report.risk));
     p::kv(
@@ -181,6 +255,88 @@ fn diff(old_wasm: PathBuf, new_wasm: PathBuf) -> Result<()> {
     }
     p::kv("Total profile", &format!("{:?}", profile.total_elapsed()));
     p::separator();
+
+    Ok(())
+}
+
+fn benchmark(dir: PathBuf, json: bool) -> Result<()> {
+    if !dir.is_dir() {
+        anyhow::bail!("{} is not a directory", dir.display());
+    }
+
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("Failed to read {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("wasm"))
+        .collect();
+    entries.sort();
+
+    if entries.is_empty() {
+        anyhow::bail!("No .wasm files found in {}", dir.display());
+    }
+
+    let mut results = Vec::new();
+    for path in &entries {
+        match optimizer::analyze_wasm(path) {
+            Ok(report) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                results.push((name, report));
+            }
+            Err(e) => {
+                p::warn(&format!("Skipping {}: {e}", path.display()));
+            }
+        }
+    }
+
+    if json {
+        let payload: Vec<_> = results
+            .iter()
+            .map(|(name, r)| serde_json::json!({ "file": name, "report": r }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    p::header("Gas Benchmark Suite");
+    p::kv("Directory", &dir.display().to_string());
+    p::kv("Contracts analyzed", &results.len().to_string());
+    println!();
+
+    let headers = ["File", "Size (B)", "Fee (stroops)", "CPU instr.", "Risk"];
+    let rows: Vec<Vec<String>> = results
+        .iter()
+        .map(|(name, r)| {
+            vec![
+                name.clone(),
+                r.size_bytes.to_string(),
+                r.gas.fee_stroops.to_string(),
+                r.gas.cpu_instructions.to_string(),
+                format!("{:?}", r.risk),
+            ]
+        })
+        .collect();
+    p::table(&headers, &rows);
+
+    if let Some((cheapest_name, cheapest)) =
+        results.iter().min_by_key(|(_, r)| r.gas.fee_stroops)
+    {
+        p::success(&format!(
+            "Cheapest: {cheapest_name} ({} stroops)",
+            cheapest.gas.fee_stroops
+        ));
+    }
+    if let Some((priciest_name, priciest)) =
+        results.iter().max_by_key(|(_, r)| r.gas.fee_stroops)
+    {
+        p::warn(&format!(
+            "Most expensive: {priciest_name} ({} stroops)",
+            priciest.gas.fee_stroops
+        ));
+    }
 
     Ok(())
 }
