@@ -133,13 +133,26 @@ pub enum TemplateCommands {
         #[arg(long, short, conflicts_with = "name")]
         all: bool,
     },
+    /// Run the built-in test suite for a template
+    Test {
+        /// Template name or path to a template directory
+        name: String,
+        /// Show verbose cargo output
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Generate Markdown documentation for a template from its registry metadata
     Docs {
-        /// Template name
+        /// Template name to generate docs for
         name: String,
-        /// Write the docs to this file instead of printing to stdout
+        /// Write the generated docs to this file (defaults to stdout)
         #[arg(long)]
-        output: Option<PathBuf>,
+        output: Option<std::path::PathBuf>,
+    },
+    /// Show security review status for a template (or all templates)
+    Audit {
+        /// Template name (omit to list the security status of all templates)
+        name: Option<String>,
     },
 }
 
@@ -208,8 +221,11 @@ pub async fn handle(cmd: TemplateCommands) -> Result<()> {
             name,
             version,
             force,
-        } => install(source, name, version, force).await,
-        TemplateCommands::Update { name, all } => update(name, all).await,
+        } => install(source, name, version, force),
+        TemplateCommands::Update { name, all } => update(name, all),
+        TemplateCommands::Test { name, verbose } => template_test(name, verbose),
+        TemplateCommands::Docs { name, output } => template_docs(name, output),
+        TemplateCommands::Audit { name } => template_audit(name),
     }
 }
 
@@ -742,16 +758,222 @@ async fn update(name: Option<String>, all: bool) -> Result<()> {
     Ok(())
 }
 
-fn docs(name: String, output: Option<PathBuf>) -> Result<()> {
+// ─── template test ────────────────────────────────────────────────────────────
+
+fn template_test(name: String, verbose: bool) -> Result<()> {
+    use std::process::Command;
+
+    p::header(&format!("Template Test: {}", name));
+
+    // Locate the template source directory — prefer builtin examples.
+    let builtin = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("templates")
+        .join("examples")
+        .join(&name);
+
+    let template_dir = if builtin.exists() {
+        builtin
+    } else {
+        // Fall back to path stored in the registry.
+        let entry = templates::get_template(&name)?;
+        match entry.path {
+            Some(ref p) => std::path::PathBuf::from(p),
+            None => anyhow::bail!(
+                "Template '{}' has no local path. Install it first with: starforge template install {}",
+                name, name
+            ),
+        }
+    };
+
+    p::kv("Template directory", &template_dir.display().to_string());
+    p::info("Running: cargo test");
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("test");
+    if verbose {
+        cmd.arg("--verbose");
+    }
+    cmd.current_dir(&template_dir);
+
+    let status = cmd.status()?;
+
+    if status.success() {
+        p::success("All tests passed");
+    } else {
+        anyhow::bail!("Tests failed for template '{}'", name);
+    }
+    Ok(())
+}
+
+// ─── template docs ────────────────────────────────────────────────────────────
+
+fn template_docs(name: String, output: Option<std::path::PathBuf>) -> Result<()> {
     let entry = templates::get_template(&name)?;
-    let markdown = templates::generate_template_docs(&entry);
+
+    let mut md = String::new();
+
+    // Title
+    md.push_str(&format!("# {} `{}`\n\n", entry.name, entry.version));
+    md.push_str(&format!("> {}\n\n", entry.description));
+
+    // Badges
+    if entry.verified {
+        md.push_str("![Verified](https://img.shields.io/badge/verified-✓-brightgreen) ");
+    }
+    md.push_str(&format!(
+        "![Maintenance](https://img.shields.io/badge/maintenance-{}-blue) ",
+        entry.maintenance.label().replace(' ', "%20")
+    ));
+    if let Some(ref lic) = entry.license {
+        md.push_str(&format!(
+            "![License](https://img.shields.io/badge/license-{}-cyan)\n\n",
+            lic
+        ));
+    } else {
+        md.push('\n');
+    }
+
+    // Metadata table
+    md.push_str("## Metadata\n\n");
+    md.push_str("| Field | Value |\n|---|---|\n");
+    md.push_str(&format!("| Author | {} |\n", entry.author));
+    md.push_str(&format!("| Version | {} |\n", entry.version));
+    md.push_str(&format!("| License | {} |\n", entry.license.as_deref().unwrap_or("Not declared")));
+    md.push_str(&format!(
+        "| Tags | {} |\n",
+        if entry.tags.is_empty() { "—".to_string() } else { entry.tags.join(", ") }
+    ));
+    md.push_str(&format!("| Source | {} |\n", entry.source));
+    if let Some(ref repo) = entry.repository {
+        md.push_str(&format!("| Repository | {} |\n", repo));
+    }
+    if let Some(ref hp) = entry.homepage {
+        md.push_str(&format!("| Homepage | {} |\n", hp));
+    }
+    md.push('\n');
+
+    // Security review
+    md.push_str("## Security Review\n\n");
+    if let Some(ref sr) = entry.security_review {
+        md.push_str(&format!("**Status:** {}\n\n", sr.status));
+        if let (Some(ref auditor), Some(ref date)) = (&sr.auditor, &sr.audited_at) {
+            md.push_str(&format!("- **Auditor:** {}\n", auditor));
+            md.push_str(&format!("- **Audited at:** {}\n", date));
+        }
+        if let Some(findings) = sr.findings {
+            md.push_str(&format!("- **Findings:** {}\n", findings));
+        }
+        if let Some(score) = sr.score {
+            md.push_str(&format!("- **Score:** {}/100\n", score));
+        }
+    } else {
+        md.push_str("No security review data available.\n");
+    }
+    md.push('\n');
+
+    // Changelog
+    if !entry.changelog.is_empty() {
+        md.push_str("## Changelog\n\n");
+        for entry in &entry.changelog {
+            md.push_str(&format!(
+                "### {} — {}\n\n{}\n\n",
+                entry.version, entry.date, entry.notes
+            ));
+        }
+    }
+
+    // Usage
+    md.push_str("## Usage\n\n");
+    md.push_str("```bash\n");
+    md.push_str(&format!("starforge new contract my-project --template {}\n", name));
+    md.push_str("```\n");
 
     match output {
         Some(path) => {
-            std::fs::write(&path, &markdown)?;
+            std::fs::write(&path, &md)?;
             p::success(&format!("Documentation written to {}", path.display()));
         }
-        None => println!("{}", markdown),
+        None => {
+            p::header(&format!("Documentation for {}", name));
+            println!("{}", md);
+        }
     }
+    Ok(())
+}
+
+// ─── template audit ───────────────────────────────────────────────────────────
+
+fn template_audit(name: Option<String>) -> Result<()> {
+    let registry = templates::load_registry()?;
+
+    let entries: Vec<&templates::TemplateEntry> = match &name {
+        Some(n) => registry
+            .templates
+            .iter()
+            .filter(|t| &t.name == n)
+            .collect(),
+        None => registry.templates.iter().collect(),
+    };
+
+    if entries.is_empty() {
+        if let Some(n) = &name {
+            anyhow::bail!("Template '{}' not found in registry", n);
+        } else {
+            p::info("No templates in registry.");
+            return Ok(());
+        }
+    }
+
+    p::header("Template Security Review Status");
+    println!(
+        "  {:<20} {:<10} {:<12} {:<10} {:<8}",
+        "NAME", "VERSION", "STATUS", "FINDINGS", "SCORE"
+    );
+    println!("  {}", "─".repeat(64));
+
+    for entry in entries {
+        let (status, findings, score) = match &entry.security_review {
+            Some(sr) => (
+                sr.status.as_str(),
+                sr.findings
+                    .map(|f| f.to_string())
+                    .unwrap_or_else(|| "—".to_string()),
+                sr.score
+                    .map(|s| format!("{}/100", s))
+                    .unwrap_or_else(|| "—".to_string()),
+            ),
+            None => ("not-reviewed", "—".to_string(), "—".to_string()),
+        };
+
+        let status_icon = match status {
+            "audited" => "✓ audited",
+            "pending" => "⧖ pending",
+            _ => "✗ not-reviewed",
+        };
+
+        println!(
+            "  {:<20} {:<10} {:<12} {:<10} {:<8}",
+            entry.name, entry.version, status_icon, findings, score
+        );
+    }
+
+    if name.is_none() {
+        println!();
+        let audited = registry
+            .templates
+            .iter()
+            .filter(|t| {
+                t.security_review
+                    .as_ref()
+                    .map(|sr| sr.status == "audited")
+                    .unwrap_or(false)
+            })
+            .count();
+        p::kv(
+            "Audited",
+            &format!("{}/{}", audited, registry.templates.len()),
+        );
+    }
+
     Ok(())
 }
