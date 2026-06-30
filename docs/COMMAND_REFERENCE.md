@@ -143,6 +143,27 @@ starforge contract generate-bindings ./token.wasm --lang rust
 
 ---
 
+## `governance`
+
+Contract upgrade governance with voting, timelock, audit trail, and emergency upgrades.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `governance propose` | Create upgrade proposal (`--contract-id`, `--wasm`, `--threshold`, `--timelock`) |
+| `governance list` | List proposals with optional filters |
+| `governance show` | Show proposal details and votes |
+| `governance vote` | Cast vote (`--for` or `--against`) |
+| `governance reject` | Reject a proposal |
+| `governance execute` | Execute after timelock and threshold met |
+| `governance emergency` | Emergency upgrade (bypasses timelock) |
+| `governance audit` | Show governance audit trail |
+| `governance dashboard` | Governance summary dashboard |
+| `governance config show/set` | View or update governance defaults |
+
+See [GOVERNANCE.md](GOVERNANCE.md) for the full workflow.
+
+---
+
 ## `tutorial`
 
 | Subcommand | Purpose |

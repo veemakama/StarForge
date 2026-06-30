@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod docs;
 pub mod doctor;
 pub mod gas;
+pub mod governance;
 pub mod info;
 pub mod inspect;
 pub mod invoke;

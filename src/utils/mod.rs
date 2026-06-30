@@ -10,6 +10,7 @@ pub mod database;
 pub mod deploy_history;
 pub mod deploy_orchestrator;
 pub mod docs;
+pub mod governance;
 pub mod hardware_wallet;
 pub mod horizon;
 pub mod logging;

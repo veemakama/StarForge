@@ -466,3 +466,28 @@ fn config_help_lists_doctor_subcommand() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("doctor"));
 }
+
+#[test]
+fn governance_help_lists_subcommands() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["governance", "--help"])
+        .output()
+        .expect("spawn governance help");
+    assert_success(&output, "starforge governance --help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("propose"));
+    assert!(stdout.contains("vote"));
+    assert!(stdout.contains("emergency"));
+    assert!(stdout.contains("dashboard"));
+}
+
+#[test]
+fn governance_dashboard_exits_zero() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["governance", "dashboard"])
+        .output()
+        .expect("spawn governance dashboard");
+    assert_success(&output, "starforge governance dashboard");
+}
