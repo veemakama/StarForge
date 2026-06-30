@@ -52,6 +52,29 @@ starforge tutorial next
 
 ---
 
+## `multisig`
+
+| Subcommand | Purpose |
+|------------|---------|
+| `wizard` | Interactive transaction proposal builder |
+| `create` | Create a proposal with threshold, signers, metadata, and optional transaction XDR |
+| `status <FILE>` | Show visual signature collection progress |
+| `verify <FILE>` | Validate signatures, duplicates, pending signers, and threshold readiness |
+| `notify <FILE>` | Queue signature request notifications for pending signers |
+| `export <FILE>` / `import <FILE>` | Share proposal JSON between signers |
+| `templates` / `from-template` | Use common scenarios like escrow, company treasury, DAO, vault, and payment |
+
+```bash
+starforge multisig wizard
+starforge multisig create --threshold 2 --signers alice,bob,carol \
+  --title "Treasury payment" --transaction-xdr <XDR>
+starforge multisig status proposal.json
+starforge multisig verify proposal.json
+starforge multisig notify proposal.json --message "Please sign the treasury payment"
+```
+
+---
+
 ## `new`
 
 | Subcommand | Purpose |
@@ -81,6 +104,30 @@ starforge deploy --wasm ./token.wasm --optimize --yes --execute
 
 starforge contract generate-bindings ./token.wasm --lang rust
 ```
+
+---
+
+## `test`
+
+| Flag | Purpose |
+|------|---------|
+| `--wasm <FILE>` | Compiled Soroban WASM under test |
+| `--fixture <FILE>` | JSON/TOML contract test suite with fixtures, mocks, and assertions |
+| `--source <FILE>` | Contract source used for generated tests or coverage |
+| `--coverage` | Include source coverage summary |
+| `--report html\|json\|junit` | Write a test report (`junit` is available for fixture suites) |
+| `--testnet` | Validate Soroban testnet integration for the run |
+| `--testnet-dry-run` | Validate testnet configuration without probing RPC health |
+
+```bash
+starforge test --wasm ./target/contract.wasm \
+  --fixture ./contract-tests.json --coverage --source ./src/lib.rs --report html
+
+starforge test --wasm ./target/contract.wasm \
+  --fixture ./contract-tests.toml --testnet --testnet-dry-run
+```
+
+Fixture suites support named storage fixtures, mocked contract calls, and assertions such as `state_equals`, `state_exists`, `return_equals`, `event_emitted`, `fee_at_most`, and `mock_called`.
 
 ---
 
@@ -129,11 +176,35 @@ starforge contract generate-bindings ./token.wasm --lang rust
 
 ---
 
+## `security`
+
+| Subcommand | Purpose |
+|------------|---------|
+| `audit <PATH>` | Run built-in Soroban analysis plus optional Slither/Mythril integrations |
+| `audit --format json\|html --out <FILE>` | Generate machine-readable or HTML audit reports |
+| `audit --ci --min-score <N>` | Fail when the audit score is below the CI threshold |
+| `audit --ci-workflow-out <FILE>` | Generate a GitHub Actions workflow for security audits |
+| `audit --track` | Create remediation tracker items for findings |
+| `remediation list` | Review tracked audit and pentest remediation items |
+
+```bash
+starforge security audit ./contracts/token/src/lib.rs --format html --out audit.html
+starforge security audit ./contracts/token/src/lib.rs --ci --min-score 85
+starforge security audit ./contracts/token/src/lib.rs \
+  --ci-workflow-out .github/workflows/starforge-security.yml
+```
+
+External tools are optional. StarForge runs built-in Soroban heuristics every time and records whether Slither/Mythril were completed, failed, skipped, or unavailable.
+
+---
+
 ## `upgrade`
 
 | Subcommand | Purpose |
 |------------|---------|
 | `upgrade prepare` | Validate upgrade WASM (`--contract-id`, `--wasm`) |
+| `upgrade auto compat` | Compare old/new WASM ABI and storage layout (`--old-wasm`, `--new-wasm`) |
+| `upgrade auto plan` | Generate compatibility-aware upgrade plan and migration template |
 | `upgrade propose` | Create governance proposal |
 | `upgrade list` / `status` | List pending proposals |
 | `upgrade approve` | Approve proposal |

@@ -33,6 +33,18 @@ pub struct CallGraphArgs {
     /// Show pattern analysis warnings
     #[arg(long, default_value = "true")]
     pub patterns: bool,
+    /// Show concrete structural / gas optimization suggestions
+    #[arg(long, default_value = "false")]
+    pub optimize: bool,
+    /// Launch the interactive call explorere (stdin menu) after extraction
+    #[arg(long, default_value = "false", conflicts_with = "out")]
+    pub explore: bool,
+    /// Filter displayed patterns by minimum severity (low|medium|high)
+    #[arg(long, value_parser = ["low", "medium", "high"])]
+    pub severity: Option<String>,
+    /// Show a one-shot statistics summary at the end
+    #[arg(long, default_value = "false")]
+    pub stats: bool,
 }
 
 #[derive(Args)]
@@ -87,6 +99,8 @@ pub struct UploadArgs {
 pub enum BindingLang {
     Rust,
     Ts,
+    Python,
+    Go,
 }
 
 #[derive(Args)]
@@ -114,6 +128,8 @@ fn handle_generate_bindings(args: GenerateBindingsArgs) -> Result<()> {
     let lang = match args.lang {
         BindingLang::Rust => bindings::BindingLanguage::Rust,
         BindingLang::Ts => bindings::BindingLanguage::TypeScript,
+        BindingLang::Python => bindings::BindingLanguage::Python,
+        BindingLang::Go => bindings::BindingLanguage::Go,
     };
     let generated = bindings::generate_bindings(&args.wasm_file, lang)?;
     println!("{}", generated);
@@ -399,9 +415,44 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
 
     let graph = call_graph::extract_call_graph(&args.path)?;
 
+    // Filter patterns by minimum severity, if requested.
+    let effective_patterns: Vec<call_graph::CallPattern> = if let Some(min) = &args.severity {
+        let rank = |s: &str| match s {
+            "high" => 3,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0,
+        };
+        let threshold = rank(min);
+        graph
+            .patterns
+            .iter()
+            .filter(|p| rank(&p.severity) >= threshold)
+            .cloned()
+            .collect()
+    } else {
+        graph.patterns.clone()
+    };
+
     let output = match args.format.as_str() {
         "dot" => call_graph::render_dot(&graph),
-        "json" => serde_json::to_string_pretty(&graph)?,
+        "json" => {
+            // Backwards-compatible JSON: keep the full `CallGraph` shape at the
+            // top level (so existing consumers still work) and *additionally*
+            // include `_stats` and `_filtered_patterns` next to it.
+            let mut view = serde_json::to_value(&graph)?;
+            if let Some(obj) = view.as_object_mut() {
+                obj.insert(
+                    "_stats".to_string(),
+                    serde_json::to_value(call_graph::compute_stats(&graph))?,
+                );
+                obj.insert(
+                    "_filtered_patterns".to_string(),
+                    serde_json::to_value(&effective_patterns)?,
+                );
+            }
+            serde_json::to_string_pretty(&view)?
+        }
         _ => call_graph::render_ascii(&graph),
     };
 
@@ -417,10 +468,10 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
     p::kv("Edges", &graph.edges.len().to_string());
     p::kv("Dependencies", &graph.dependencies.len().to_string());
 
-    if args.patterns && !graph.patterns.is_empty() {
+    if args.patterns && !effective_patterns.is_empty() {
         println!();
         p::header("Pattern Analysis");
-        for pat in &graph.patterns {
+        for pat in &effective_patterns {
             let icon = match pat.severity.as_str() {
                 "high" => "⚠",
                 "medium" => "⚡",
@@ -433,6 +484,116 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
         p::info("Use `starforge security audit <path>` for a full security report.");
     }
 
+    if args.stats {
+        let stats = call_graph::compute_stats(&graph);
+        println!();
+        p::header("Graph Statistics");
+        println!(
+            "  {:<24} {}",
+            "Total nodes".dimmed(),
+            stats.total_nodes.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Total edges".dimmed(),
+            stats.total_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "  external".dimmed(),
+            stats.external_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "  internal".dimmed(),
+            stats.internal_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Direct invokes".dimmed(),
+            stats.direct_invokes.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Client constructions".dimmed(),
+            stats.client_constructions.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Dependencies".dimmed(),
+            stats.dependencies.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Patterns (h/m/l)".dimmed(),
+            format!(
+                "{} / {} / {}",
+                stats.patterns_high, stats.patterns_medium, stats.patterns_low
+            )
+            .bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Max out-degree".dimmed(),
+            stats.fan_out_max.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Max in-degree".dimmed(),
+            stats.fan_in_max.to_string().bright_white()
+        );
+    }
+
+    if args.optimize {
+        // Compute suggestions on the unfiltered graph (most suggestions are
+        // derived from edges / dependencies, not patterns) and then post-filter
+        // by priority so `--severity=high` hides low / medium hints without
+        // paying for a full graph clone.
+        let all = call_graph::generate_suggestions(&graph);
+        let suggestions: Vec<_> = if let Some(min) = &args.severity {
+            let rank = |p: &str| match p {
+                "high" => 3,
+                "medium" => 2,
+                _ => 1,
+            };
+            let threshold = rank(min);
+            all.into_iter()
+                .filter(|s| rank(&s.priority) >= threshold)
+                .collect()
+        } else {
+            all
+        };
+        println!();
+        p::header("Optimization Suggestions");
+        if suggestions.is_empty() {
+            p::info("No optimization opportunities detected.");
+        } else {
+            for sug in &suggestions {
+                let icon = match sug.priority.as_str() {
+                    "high" => "▲".red(),
+                    "medium" => "●".yellow(),
+                    _ => "·".cyan(),
+                };
+                println!(
+                    "  {} [{}] {} → {}",
+                    icon,
+                    sug.priority.to_uppercase().dimmed(),
+                    sug.title.bright_white(),
+                    sug.target.bright_green()
+                );
+                println!("      {}", sug.detail.dimmed());
+                if let Some(s) = &sug.estimated_savings {
+                    println!("      est. savings: {}", s.cyan());
+                }
+            }
+        }
+    }
+
     p::success("Call graph extraction complete");
+
+    if args.explore {
+        call_graph::explore_graph(&graph)?;
+    }
+
     Ok(())
 }
