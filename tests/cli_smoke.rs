@@ -101,6 +101,20 @@ fn deploy_help_documents_flags() {
 }
 
 #[test]
+fn upgrade_auto_help_lists_compatibility_commands() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["upgrade", "auto", "--help"])
+        .output()
+        .expect("spawn upgrade auto help");
+    assert_success(&output, "starforge upgrade auto --help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("compat"));
+    assert!(stdout.contains("plan"));
+    assert!(stdout.contains("migration"));
+}
+
+#[test]
 fn network_add_custom_succeeds() {
     let home = isolated_home();
     let net_name = format!(
@@ -465,4 +479,29 @@ fn config_help_lists_doctor_subcommand() {
     assert_success(&output, "starforge config --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("doctor"));
+}
+
+#[test]
+fn governance_help_lists_subcommands() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["governance", "--help"])
+        .output()
+        .expect("spawn governance help");
+    assert_success(&output, "starforge governance --help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("propose"));
+    assert!(stdout.contains("vote"));
+    assert!(stdout.contains("emergency"));
+    assert!(stdout.contains("dashboard"));
+}
+
+#[test]
+fn governance_dashboard_exits_zero() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["governance", "dashboard"])
+        .output()
+        .expect("spawn governance dashboard");
+    assert_success(&output, "starforge governance dashboard");
 }

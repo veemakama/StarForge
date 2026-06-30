@@ -284,6 +284,155 @@ fn bench_basic(c: &mut Criterion) {
     });
 }
 
+// ── 8. Gas analyzer — WASM section parsing ───────────────────────────────────
+
+/// Benchmarks the WASM section parser at various binary sizes.
+/// Mirrors the cost incurred by `starforge gas profile` on each analysis run.
+fn bench_gas_section_parsing(c: &mut Criterion) {
+    use starforge::utils::gas_analyzer::parse_wasm_sections;
+
+    let mut group = c.benchmark_group("gas_section_parsing");
+    group.measurement_time(Duration::from_secs(8));
+
+    for size_kb in [8usize, 32, 64, 128] {
+        // Construct a minimal valid WASM padded with a custom section.
+        let mut wasm = vec![0x00u8, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        let payload_size = size_kb * 1024 - 8;
+        if payload_size > 0 {
+            // Custom section (id=0) + LEB128 length + padding
+            wasm.push(0x00);
+            let mut v = payload_size as u64;
+            loop {
+                let mut b = (v & 0x7F) as u8;
+                v >>= 7;
+                if v != 0 {
+                    b |= 0x80;
+                }
+                wasm.push(b);
+                if v == 0 {
+                    break;
+                }
+            }
+            wasm.extend(vec![0x41u8; payload_size]);
+        }
+
+        group.throughput(Throughput::Bytes(wasm.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{}KB", size_kb)),
+            &wasm,
+            |b, data| {
+                b.iter(|| {
+                    let profile = parse_wasm_sections(black_box(data));
+                    black_box(profile);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── 9. Gas analyzer — finding generation ─────────────────────────────────────
+
+/// Benchmarks the optimization suggestion engine on WASM bytes of varying sizes.
+/// This measures the regex/pattern scan that powers `starforge gas profile`.
+fn bench_gas_finding_generation(c: &mut Criterion) {
+    use starforge::utils::gas_analyzer::{generate_findings, parse_wasm_sections};
+
+    let mut group = c.benchmark_group("gas_finding_generation");
+    group.measurement_time(Duration::from_secs(6));
+
+    // Embed "panic" and "println" strings to exercise all pattern checks.
+    let mut base_wasm = vec![0x00u8, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+    base_wasm.extend_from_slice(b"panic println debug");
+
+    for extra_kb in [8usize, 64, 96] {
+        let mut wasm = base_wasm.clone();
+        wasm.extend(vec![0x41u8; extra_kb * 1024]);
+
+        group.throughput(Throughput::Bytes(wasm.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{}KB", extra_kb + 1)),
+            &wasm,
+            |b, data| {
+                b.iter(|| {
+                    let profile = parse_wasm_sections(black_box(data));
+                    let findings = generate_findings(black_box(data), &profile);
+                    black_box(findings);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── 10. Gas cost breakdown computation ───────────────────────────────────────
+
+/// Benchmarks the arithmetic-only gas cost estimation.
+fn bench_gas_cost_computation(c: &mut Criterion) {
+    use starforge::utils::gas_analyzer::{GasCostBreakdown, WasmSectionProfile};
+
+    let mut group = c.benchmark_group("gas_cost_computation");
+    group.measurement_time(Duration::from_secs(5));
+
+    let profile = WasmSectionProfile {
+        import_count: 15,
+        export_count: 8,
+        global_count: 6,
+        data_segment_count: 4,
+        estimated_instruction_count: 12_000,
+        code_section_bytes: 40 * 1024,
+        ..Default::default()
+    };
+
+    group.bench_function("compute_breakdown_40kb", |b| {
+        b.iter(|| {
+            let cost = GasCostBreakdown::compute(black_box(&profile), 40 * 1024);
+            black_box(cost);
+        })
+    });
+
+    group.finish();
+}
+
+// ── 11. Gas version comparison ────────────────────────────────────────────────
+
+/// Benchmarks the two-pass analysis used by `starforge gas compare`.
+fn bench_gas_version_comparison(c: &mut Criterion) {
+    use starforge::utils::gas_analyzer::{
+        compute_optimization_score, generate_findings, parse_wasm_sections,
+    };
+
+    let mut group = c.benchmark_group("gas_version_comparison");
+    group.measurement_time(Duration::from_secs(6));
+
+    let make_wasm = |size_kb: usize| -> Vec<u8> {
+        let mut w = vec![0x00u8, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        w.extend(vec![0x41u8; size_kb * 1024]);
+        w
+    };
+
+    let baseline = make_wasm(48);
+    let candidate = make_wasm(40); // simulating a size-reduced candidate
+
+    group.bench_function("compare_48kb_vs_40kb", |b| {
+        b.iter(|| {
+            let bp = parse_wasm_sections(black_box(&baseline));
+            let bf = generate_findings(black_box(&baseline), &bp);
+            let bs = compute_optimization_score(&bf);
+
+            let cp = parse_wasm_sections(black_box(&candidate));
+            let cf = generate_findings(black_box(&candidate), &cp);
+            let cs = compute_optimization_score(&cf);
+
+            black_box((bs, cs));
+        })
+    });
+
+    group.finish();
+}
+
 // ── Registration ──────────────────────────────────────────────────────────────
 
 criterion_group!(
@@ -296,5 +445,9 @@ criterion_group!(
     bench_profiler_overhead,
     bench_wasm_byte_scan,
     bench_deploy_payload_build,
+    bench_gas_section_parsing,
+    bench_gas_finding_generation,
+    bench_gas_cost_computation,
+    bench_gas_version_comparison,
 );
 criterion_main!(benches);
