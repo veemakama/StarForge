@@ -11,8 +11,8 @@ pub fn validate_wasm(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn ensure_docker_sandbox() -> Result<()> {
-    node::ensure_running(8000)
+pub async fn ensure_docker_sandbox() -> Result<()> {
+    node::ensure_running(8000).await
 }
 
 pub fn stop_docker_sandbox() -> Result<()> {

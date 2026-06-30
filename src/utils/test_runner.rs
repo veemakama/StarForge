@@ -1,5 +1,7 @@
 use crate::utils::mock_soroban;
-use crate::utils::test_coverage::{analyze_source_coverage, CoverageReport};
+use crate::utils::test_coverage::{
+    analyze_source_coverage_with_executions, CoverageReport, CoverageTestExecution,
+};
 use crate::utils::test_generator::{generate_from_source, GeneratedTestCase};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -74,9 +76,11 @@ pub fn run_contract_tests(wasm: &Path, opts: TestOptions) -> Result<TestRunResul
     let coverage = if opts.coverage {
         opts.source.as_ref().map(|src| {
             let content = fs::read_to_string(src).unwrap_or_default();
-            let executed: Vec<String> =
-                generated_cases.iter().map(|c| c.function.clone()).collect();
-            analyze_source_coverage(&content, &executed)
+            let executions = generated_cases
+                .iter()
+                .map(|case| CoverageTestExecution::new(case.name.clone(), case.function.clone()))
+                .collect::<Vec<_>>();
+            analyze_source_coverage_with_executions(&content, &executions)
         })
     } else {
         None
@@ -244,7 +248,12 @@ fn write_report(report: &AggregatedReport, format: &str, coverage: bool) -> Resu
             let cov = report
                 .coverage
                 .as_ref()
-                .map(|c| format!("<p>Coverage: {:.1}%</p>", c.coverage_percent))
+                .map(|c| {
+                    format!(
+                        "<p>Coverage: {:.1}% | Functions: {:.1}% | Branches: {:.1}%</p>",
+                        c.coverage_percent, c.function_coverage_percent, c.branch_coverage_percent
+                    )
+                })
                 .unwrap_or_default();
             let html = format!(
                 "<!doctype html><html><head><title>Test Report</title></head><body>

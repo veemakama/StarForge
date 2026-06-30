@@ -15,11 +15,11 @@ pub enum NodeCommands {
 
 pub async fn handle(cmd: NodeCommands) -> Result<()> {
     match cmd {
-        NodeCommands::Start { port } => start(port),
+        NodeCommands::Start { port } => start(port).await,
     }
 }
 
-fn start(port: u16) -> Result<()> {
+async fn start(port: u16) -> Result<()> {
     p::header("Local Devnet");
     p::step(1, 3, "Checking Docker…");
     node::ensure_docker_available()?;
@@ -27,7 +27,7 @@ fn start(port: u16) -> Result<()> {
 
     p::step(2, 3, &format!("Starting {}…", node::QUICKSTART_IMAGE));
     let already_running = node::container_running().unwrap_or(false);
-    node::start_devnet(port)?;
+    node::start_devnet(port).await?;
     if already_running {
         p::info("Devnet container was already running; verified health.");
     } else {

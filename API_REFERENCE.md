@@ -1024,7 +1024,7 @@ Gas analysis and optimization.
 
 #### `starforge gas analyze`
 
-Analyze gas costs.
+Analyze gas costs, resource usage, and optimization opportunities.
 
 **Usage:**
 ```bash
@@ -1034,6 +1034,13 @@ starforge gas analyze --wasm <FILE> [OPTIONS]
 **Options:**
 - `--wasm <FILE>` - Path to wasm file (required)
 - `--network <NETWORK>` - Network to use
+
+**Output includes:**
+- WASM size and SHA256 fingerprint
+- Heuristic score and gas risk level
+- Estimated CPU instructions, memory bytes, storage bytes, and fee in stroops
+- Host-call and control-flow operation counts
+- Optimization suggestions for large binaries, panic strings, debug printing, and expensive host-call patterns
 
 #### `starforge gas optimize`
 
@@ -1050,7 +1057,7 @@ starforge gas optimize --target <INPUT> --output <OUTPUT>
 
 #### `starforge gas diff`
 
-Compare two wasm builds side-by-side and diff estimated simulation cost.
+Compare two wasm builds side-by-side and detect estimated gas regressions.
 
 **Usage:**
 ```bash
@@ -1063,8 +1070,10 @@ starforge gas diff <OLD_WASM> <NEW_WASM>
 
 **Output includes:**
 - Old/new wasm size
-- Old/new estimated simulation cost
-- Delta and percentage change
+- Old/new estimated fee in stroops
+- Old/new estimated CPU instructions
+- Old/new gas risk level
+- Delta, percentage change, and regression classification
 - Profiling timings per analysis step
 
 ---

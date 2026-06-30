@@ -144,7 +144,8 @@ enum Commands {
     #[command(subcommand)]
     Tutorial(crate::commands::tutorial::TutorialCommands),
     /// Performance benchmarking utilities
-    Benchmark(crate::commands::benchmark::BenchmarkArgs),
+    #[command(subcommand)]
+    Benchmark(crate::commands::benchmark::BenchmarkCommands),
     /// Contract testing utilities for Soroban wasm
     Test(crate::commands::test::TestArgs),
     /// Gas analysis and optimization helpers

@@ -1,8 +1,8 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -171,7 +171,8 @@ pub fn get_audit_report(start_time: Option<&str>, end_time: Option<&str>) -> Res
 }
 
 pub fn export_audit_log_csv(entries: &[AuditEntry]) -> String {
-    let mut csv = String::from("id,action,actor,resource_type,resource_id,timestamp,success,error_message\n");
+    let mut csv =
+        String::from("id,action,actor,resource_type,resource_id,timestamp,success,error_message\n");
     for entry in entries {
         csv.push_str(&format!(
             "{},{},{},{},{},{},{},{}\n",
@@ -186,6 +187,40 @@ pub fn export_audit_log_csv(entries: &[AuditEntry]) -> String {
         ));
     }
     csv
+}
+
+pub fn log_approval_action(
+    action: &str,
+    actor: &str,
+    request_id: &str,
+    contract_id: &str,
+    network: &str,
+    level: &str,
+    details: std::collections::HashMap<String, String>,
+    success: bool,
+) -> Result<()> {
+    let mut all_details = details;
+    all_details.insert("network".to_string(), network.to_string());
+    all_details.insert("level".to_string(), level.to_string());
+    all_details.insert("contract_id".to_string(), contract_id.to_string());
+
+    log_action(
+        &format!("approval_{}", action),
+        actor,
+        "approval_request",
+        request_id,
+        all_details,
+        success,
+        None,
+    )
+}
+
+pub fn get_approval_audit_trail(request_id: &str) -> Result<Vec<AuditEntry>> {
+    let entries = load_audit_log()?;
+    Ok(entries
+        .into_iter()
+        .filter(|e| e.resource_type == "approval_request" && e.resource_id == request_id)
+        .collect())
 }
 
 pub fn check_compliance_violations() -> Result<Vec<String>> {
@@ -204,7 +239,8 @@ pub fn check_compliance_violations() -> Result<Vec<String>> {
         if !entry.success {
             violations.push(format!(
                 "Failed deployment by {} on contract {}: {}",
-                entry.actor, entry.resource_id,
+                entry.actor,
+                entry.resource_id,
                 entry.error_message.as_deref().unwrap_or("unknown error")
             ));
         }

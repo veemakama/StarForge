@@ -255,6 +255,21 @@ starforge contract generate-bindings ./my_contract.wasm --lang rust
 starforge contract generate-bindings ./my_contract.wasm --lang ts
 ```
 
+### Rollback safety testing
+
+```bash
+# Validate that an upgraded contract can be rolled back without losing critical state
+starforge test \
+  --wasm target/wasm32-unknown-unknown/release/my_contract_v2.wasm \
+  --rollback \
+  --previous-wasm target/wasm32-unknown-unknown/release/my_contract_v1.wasm \
+  --rollback-scenario tests/rollback/token-balances.json \
+  --rollback-performance-budget-ms 1000 \
+  --report json
+```
+
+The rollback harness checks state preservation, rollback scenarios, data integrity invariants, and rollback performance budgets. See [ROLLBACK_TESTING.md](ROLLBACK_TESTING.md) for scenario schema and CI examples.
+
 ### Environment info
 
 ```bash
