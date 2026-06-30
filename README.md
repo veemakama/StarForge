@@ -255,6 +255,77 @@ starforge contract generate-bindings ./my_contract.wasm --lang rust
 starforge contract generate-bindings ./my_contract.wasm --lang ts
 ```
 
+### Security audit commands
+
+```bash
+# Full security audit pipeline (built-in + external tools)
+starforge audit ./src/contract.rs
+
+# Only run the built-in Soroban static analysis (no external tools)
+starforge audit ./src/contract.rs --slither false --mythril false
+
+# Include cargo-audit dependency scan and Clippy static analysis
+starforge audit ./src/contract.rs --cargo-audit true --clippy true
+
+# Output as JSON (print to stdout)
+starforge audit ./src/contract.rs --format json
+
+# Save HTML report to file
+starforge audit ./src/contract.rs --format html --out report.html
+
+# Save JSON report to file
+starforge audit ./src/contract.rs --format json --out audit.json
+
+# CI mode — exit code 1 if score is below 60 (default CI threshold)
+starforge audit ./src/contract.rs --ci
+
+# CI mode with a custom threshold
+starforge audit ./src/contract.rs --ci --min-score 75
+
+# Quiet mode: only prints the numeric score (useful for scripting)
+starforge audit ./src/contract.rs --quiet
+```
+
+**Scanners included in the audit pipeline:**
+
+| Scanner | What it checks | Requires |
+|---------|---------------|----------|
+| `starforge-builtin` | Soroban-specific patterns: missing `require_auth()`, unchecked arithmetic, hardcoded addresses, unsafe unwrap, reentrancy, upgrade guard | Always runs |
+| Slither | Smart contract static analysis (`slither` binary) | `pip install slither-analyzer` |
+| Mythril | Symbolic execution (`myth` binary) | `pip install mythril` |
+| cargo-audit | Dependency vulnerabilities (RustSec advisory DB) | `cargo install cargo-audit` |
+| Clippy | Rust static analysis filtered to security-relevant lints | Ships with Rust |
+
+All external tools are **optional and gracefully skipped** when not installed. The built-in analysis always runs without any external dependencies.
+
+**Security score formula:**
+
+```
+Score = 100 − (critical×30 + high×15 + medium×7.5 + low×2.5 + info×0.5)   [min 0]
+```
+
+| Range | Label |
+|-------|-------|
+| 90–100 | Excellent |
+| 70–89 | Good |
+| 50–69 | Fair |
+| 0–49 | Poor |
+
+**CI/CD integration example (GitHub Actions):**
+
+```yaml
+- name: Security audit
+  run: starforge audit src/contract.rs --ci --min-score 70 --format json --out audit.json
+
+- name: Upload audit report
+  uses: actions/upload-artifact@v4
+  with:
+    name: security-audit
+    path: audit.json
+```
+
+---
+
 ### Environment info
 
 ```bash

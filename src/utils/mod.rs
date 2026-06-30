@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod security_scanner;
 pub mod backup;
 pub mod benchmarking;
 pub mod bindings;

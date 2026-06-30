@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod audit;
 pub mod backup;
 pub mod benchmark;
 pub mod command_tree;
