@@ -24,7 +24,7 @@ pub mod mnemonic;
 pub mod mock_soroban;
 pub mod multisig;
 pub mod multisig_builder;
-pub mod network_sim;
+pub mod network_simulator;
 pub mod node;
 pub mod notifications;
 pub mod optimizer;

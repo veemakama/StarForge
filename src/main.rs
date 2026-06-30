@@ -136,6 +136,10 @@ enum Commands {
     #[command(subcommand)]
     Schedule(commands::schedule::ScheduleCommands),
 
+    /// Local network simulation and testing environment
+    #[command(subcommand)]
+    Simulate(commands::simulate::SimulateCommands),
+
     /// Backup and disaster recovery for contract state and code
     #[command(subcommand)]
     Backup(commands::backup::BackupCommands),
@@ -215,6 +219,7 @@ async fn main() {
         Commands::Orchestrate(_) => "orchestrate",
         Commands::Security(_) => "security",
         Commands::Schedule(_) => "schedule",
+        Commands::Simulate(_) => "simulate",
         Commands::Backup(_) => "backup",
         Commands::Lint(_) => "lint",
         Commands::Diagnostics(_) => "diagnostics",
@@ -257,6 +262,7 @@ async fn main() {
         Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd).await,
         Commands::Security(cmd) => commands::security::handle(cmd).await,
         Commands::Schedule(cmd) => commands::schedule::handle(cmd).await,
+        Commands::Simulate(cmd) => commands::simulate::handle(cmd).await,
         Commands::Backup(cmd) => commands::backup::handle(cmd).await,
         Commands::Lint(args) => commands::lint::handle(args).await,
         Commands::Diagnostics(args) => commands::diagnostics::handle(args).await,

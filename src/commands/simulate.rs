@@ -1,5 +1,13 @@
-use crate::utils::network_sim::{
-    builtin_scenarios, load_scenario, save_scenario, sim_data_dir, FailureMode, NetworkSimulator,
+//! # Simulate Command
+//!
+//! CLI interface for the Network Simulation and Testing Environment.
+//! Provides subcommands to create scenarios, run simulations, manage
+//! state snapshots, control time, and inject failures.
+
+use crate::utils::network_simulator::{
+    failure::{FailureMode, FailureRule},
+    scenarios::{BuiltInScenario, ScenarioRunner, ScenarioResult},
+    simulator::NetworkSimulator,
 };
 use crate::utils::print as p;
 use anyhow::Result;
@@ -9,330 +17,912 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum SimulateCommands {
-    /// Start an interactive simulation session
+    /// List available built-in simulation scenarios
+    ListScenarios,
+    /// Run a built-in or custom simulation scenario
     Run(RunArgs),
-    /// Save current simulator state to a snapshot file
+    /// Create and save a custom scenario to a JSON file
+    Create(CreateArgs),
+    /// Import a scenario from a JSON file
+    Import(ImportArgs),
+
+    /// Take a state snapshot
     Snapshot(SnapshotArgs),
-    /// Restore simulator state from a snapshot file
+    /// List available snapshots
+    Snapshots,
+    /// Restore a snapshot by ID
     Restore(RestoreArgs),
-    /// Advance virtual time in the simulator
-    Time(TimeArgs),
-    /// Configure failure injection for testing
-    Fail(FailArgs),
-    /// Run a predefined or custom simulation scenario
-    Scenario(ScenarioArgs),
-    /// List built-in simulation scenarios
-    List,
+    /// Export a snapshot to a JSON file
+    ExportSnapshot(ExportSnapshotArgs),
+    /// Import a snapshot from a JSON file
+    ImportSnapshot(ImportSnapshotArgs),
+
+    /// Show current time and ledger state
+    Time,
+    /// Advance the ledger by a number of sequences
+    Advance(AdvanceArgs),
+    /// Jump to a specific ledger sequence
+    Jump(JumpArgs),
+    /// Freeze or unfreeze time
+    Freeze(FreezeArgs),
+    /// Save a time point for later restoration
+    SaveTime(SaveTimeArgs),
+    /// Restore a saved time point
+    RestoreTime(RestoreTimeArgs),
+
+    /// List active failure injection rules
+    Failures,
+    /// Add a failure injection rule
+    AddFailure(AddFailureArgs),
+    /// Remove a failure injection rule
+    RemoveFailure(RemoveFailureArgs),
+    /// Enable or disable failure injection
+    ToggleFailure(ToggleFailureArgs),
+
+    /// Show simulator status (ledger, accounts, contracts)
+    Status,
+
+    /// Deploy a simulated contract
+    Deploy(DeploySimArgs),
+    /// Invoke a simulated contract function
+    Invoke(InvokeSimArgs),
+    /// List accounts in the simulator
+    Accounts,
+    /// List contracts in the simulator
+    Contracts,
+
+    /// Reset the simulator to its initial state
+    Reset,
 }
 
 #[derive(Args)]
 pub struct RunArgs {
-    /// Deterministic seed for reproducible execution
+    /// Name of the built-in scenario to run
+    #[arg(long, default_value = "simple-counter")]
+    pub scenario: String,
+
+    /// Seed for deterministic execution
     #[arg(long, default_value = "42")]
     pub seed: u64,
-    /// WASM hash to deploy in the simulation
+
+    /// Show detailed output
+    #[arg(long, default_value = "false")]
+    pub verbose: bool,
+}
+
+#[derive(Args)]
+pub struct CreateArgs {
+    /// Output file path for the scenario JSON
     #[arg(long)]
-    pub wasm_hash: Option<String>,
-    /// Contract function to invoke after deploy
+    pub output: PathBuf,
+
+    /// Scenario name (simple-counter, token-transfer, escrow, multisig-vault, empty, load-test)
+    #[arg(long, default_value = "simple-counter")]
+    pub scenario: String,
+
+    /// Seed for deterministic execution
+    #[arg(long, default_value = "42")]
+    pub seed: u64,
+}
+
+#[derive(Args)]
+pub struct ImportArgs {
+    /// Path to scenario JSON file
     #[arg(long)]
-    pub invoke: Option<String>,
-    /// Arguments for the invoke call
-    #[arg(long, num_args = 0..)]
-    pub args: Vec<String>,
-    /// Simulated network latency in milliseconds
-    #[arg(long, default_value = "0")]
-    pub latency_ms: u64,
+    pub path: PathBuf,
+
+    /// Show detailed output
+    #[arg(long, default_value = "false")]
+    pub verbose: bool,
 }
 
 #[derive(Args)]
 pub struct SnapshotArgs {
-    /// Snapshot name
-    #[arg(long)]
-    pub name: String,
-    /// Path to save snapshot (defaults to ~/.starforge/sim/<name>.json)
-    #[arg(long)]
-    pub path: Option<PathBuf>,
-    /// Seed used when creating the snapshot state
-    #[arg(long, default_value = "42")]
-    pub seed: u64,
+    /// Label for the snapshot
+    pub label: String,
 }
 
 #[derive(Args)]
 pub struct RestoreArgs {
-    /// Path to snapshot file
+    /// Snapshot ID to restore
+    pub id: String,
+}
+
+#[derive(Args)]
+pub struct ExportSnapshotArgs {
+    /// Snapshot ID
+    pub id: String,
+    /// Output file path
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Args)]
+pub struct ImportSnapshotArgs {
+    /// Path to snapshot JSON file
     #[arg(long)]
     pub path: PathBuf,
-    /// Seed for deterministic execution after restore
-    #[arg(long, default_value = "42")]
-    pub seed: u64,
 }
 
 #[derive(Args)]
-pub struct TimeArgs {
-    /// Advance virtual time by this many seconds
-    #[arg(long, group = "advance")]
-    pub seconds: Option<u64>,
-    /// Advance ledger sequence by this many ledgers
-    #[arg(long, group = "advance")]
-    pub ledgers: Option<u32>,
-    /// Seed for the simulator
-    #[arg(long, default_value = "42")]
-    pub seed: u64,
+pub struct AdvanceArgs {
+    /// Number of ledger closes to advance
+    #[arg(default_value = "1")]
+    pub count: u32,
 }
 
 #[derive(Args)]
-pub struct FailArgs {
-    /// Failure mode: none, timeout, error, insufficient_fee, contract_not_found, random
-    #[arg(long, default_value = "none")]
+pub struct JumpArgs {
+    /// Target ledger sequence number
+    pub sequence: u32,
+}
+
+#[derive(Args)]
+pub struct FreezeArgs {
+    /// Action: freeze or unfreeze
+    pub action: String,
+}
+
+#[derive(Args)]
+pub struct SaveTimeArgs {
+    /// Label for the time point
+    pub label: String,
+}
+
+#[derive(Args)]
+pub struct RestoreTimeArgs {
+    /// Label of the time point to restore
+    pub label: String,
+}
+
+#[derive(Args)]
+pub struct AddFailureArgs {
+    /// Rule name
+    #[arg(long)]
+    pub name: String,
+
+    /// Failure mode (rpc-timeout, connection-refused, insufficient-fee, bad-auth,
+    /// contract-panic, account-not-found, contract-not-found, insufficient-balance,
+    /// budget-exceeded)
+    #[arg(long)]
     pub mode: String,
-    /// Probability (0-100) for random failure mode
-    #[arg(long, default_value = "50")]
-    pub probability: u8,
-    /// Seed for the simulator
-    #[arg(long, default_value = "42")]
-    pub seed: u64,
+
+    /// Optional RPC method filter
+    #[arg(long)]
+    pub rpc_method: Option<String>,
+
+    /// Optional contract ID filter
+    #[arg(long)]
+    pub contract: Option<String>,
+
+    /// Optional account filter
+    #[arg(long)]
+    pub account: Option<String>,
+
+    /// Probability of firing (0.0 to 1.0, default 1.0)
+    #[arg(long, default_value = "1.0")]
+    pub probability: f64,
+
+    /// Maximum activations (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    pub max_activations: u64,
 }
 
 #[derive(Args)]
-pub struct ScenarioArgs {
-    /// Built-in scenario name or path to custom scenario JSON
+pub struct RemoveFailureArgs {
+    /// Rule name to remove
+    pub name: String,
+}
+
+#[derive(Args)]
+pub struct ToggleFailureArgs {
+    /// Enable or disable
+    pub action: String,
+}
+
+#[derive(Args)]
+pub struct DeploySimArgs {
+    /// WASM hash to deploy
+    #[arg(long)]
+    pub wasm_hash: String,
+
+    /// Deployer public key
+    #[arg(long)]
+    pub deployer: String,
+
+    /// Contract name (optional)
     #[arg(long)]
     pub name: Option<String>,
-    /// Path to custom scenario file
-    #[arg(long)]
-    pub file: Option<PathBuf>,
-    /// Save scenario result as JSON
-    #[arg(long)]
-    pub json: bool,
-    /// Export a built-in scenario to a file
-    #[arg(long)]
-    pub export: Option<PathBuf>,
 }
+
+#[derive(Args)]
+pub struct InvokeSimArgs {
+    /// Contract ID to invoke
+    pub contract_id: String,
+
+    /// Function to invoke
+    pub function: String,
+
+    /// Arguments to the function
+    #[arg(last = true)]
+    pub args: Vec<String>,
+}
+
+// ── Global simulator state (lazy) ─────────────────────────────────────────────
+
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+static CURRENT_SIM: Lazy<Mutex<Option<NetworkSimulator>>> = Lazy::new(|| Mutex::new(None));
+static LAST_RESULT: Lazy<Mutex<Option<ScenarioResult>>> = Lazy::new(|| Mutex::new(None));
+
+fn get_or_create_sim() -> std::sync::MutexGuard<'static, Option<NetworkSimulator>> {
+    let mut guard = CURRENT_SIM.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(NetworkSimulator::new());
+    }
+    guard
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
 
 pub async fn handle(cmd: SimulateCommands) -> Result<()> {
     match cmd {
-        SimulateCommands::Run(args) => handle_run(args),
-        SimulateCommands::Snapshot(args) => handle_snapshot(args),
-        SimulateCommands::Restore(args) => handle_restore(args),
-        SimulateCommands::Time(args) => handle_time(args),
-        SimulateCommands::Fail(args) => handle_fail(args),
-        SimulateCommands::Scenario(args) => handle_scenario(args),
-        SimulateCommands::List => handle_list(),
+        SimulateCommands::ListScenarios => list_scenarios(),
+        SimulateCommands::Run(args) => run_scenario(args),
+        SimulateCommands::Create(args) => create_scenario(args),
+        SimulateCommands::Import(args) => import_scenario(args),
+        SimulateCommands::Snapshot(args) => take_snapshot(args),
+        SimulateCommands::Snapshots => list_snapshots(),
+        SimulateCommands::Restore(args) => restore_snapshot(args),
+        SimulateCommands::ExportSnapshot(args) => export_snapshot(args),
+        SimulateCommands::ImportSnapshot(args) => import_snapshot(args),
+        SimulateCommands::Time => show_time(),
+        SimulateCommands::Advance(args) => advance(args),
+        SimulateCommands::Jump(args) => jump(args),
+        SimulateCommands::Freeze(args) => toggle_freeze(args),
+        SimulateCommands::SaveTime(args) => save_time(args),
+        SimulateCommands::RestoreTime(args) => restore_time(args),
+        SimulateCommands::Failures => list_failures(),
+        SimulateCommands::AddFailure(args) => add_failure(args),
+        SimulateCommands::RemoveFailure(args) => remove_failure(args),
+        SimulateCommands::ToggleFailure(args) => toggle_failure(args),
+        SimulateCommands::Status => show_status(),
+        SimulateCommands::Deploy(args) => deploy_contract(args),
+        SimulateCommands::Invoke(args) => invoke_contract(args),
+        SimulateCommands::Accounts => list_accounts(),
+        SimulateCommands::Contracts => list_contracts(),
+        SimulateCommands::Reset => reset_sim(),
     }
 }
 
-fn handle_run(args: RunArgs) -> Result<()> {
-    p::header("Network Simulation");
-    p::kv("Seed", &args.seed.to_string());
-    p::kv("Latency", &format!("{}ms", args.latency_ms));
+// ── Scenario commands ─────────────────────────────────────────────────────────
 
-    let mut sim = NetworkSimulator::new(args.seed);
-    sim.set_latency(args.latency_ms);
+fn list_scenarios() -> Result<()> {
+    p::header("Available Built-in Scenarios");
+    p::separator();
 
-    if let Some(ref hash) = args.wasm_hash {
-        p::step(1, 2, "Deploying contract in simulator…");
-        let contract_id = sim.deploy_contract(hash)?;
-        p::success(&format!("Deployed: {}", contract_id));
-        p::kv("WASM hash", hash);
-        p::kv("Ledger", &sim.state().ledger_sequence.to_string());
-
-        if let Some(ref function) = args.invoke {
-            p::step(2, 2, &format!("Invoking {}…", function));
-            let result = sim.invoke(&contract_id, function, &args.args)?;
-            p::success("Invocation complete");
-            p::kv("Return value", &result.return_value);
-            p::kv("Fee (stroops)", &result.fee.to_string());
-            p::kv("Ledger", &result.ledger_sequence.to_string());
-            for event in &result.events {
-                println!("  {} {}", "event:".dimmed(), event);
-            }
-        }
-    } else {
-        p::info("No --wasm-hash provided. Simulator initialized with empty state.");
-        p::info("Use `starforge simulate scenario` to run predefined test scenarios.");
+    for scenario in &[
+        BuiltInScenario::SimpleCounter,
+        BuiltInScenario::TokenTransfer,
+        BuiltInScenario::Escrow,
+        BuiltInScenario::MultisigVault,
+        BuiltInScenario::Empty,
+        BuiltInScenario::LoadTest,
+    ] {
+        println!(
+            "  {} {}",
+            scenario.name().cyan().bold(),
+            format!("— {}", scenario.description()).dimmed()
+        );
     }
 
-    let state_path = sim_data_dir().join(format!("state_{}.json", args.seed));
-    sim.save_to_file(&state_path)?;
-    p::kv("State saved", &state_path.display().to_string());
+    p::separator();
+    p::info("Run a scenario with: starforge simulate run --scenario <name>");
     Ok(())
 }
 
-fn handle_snapshot(args: SnapshotArgs) -> Result<()> {
-    p::header("Simulation Snapshot");
-    let path = args
-        .path
-        .unwrap_or_else(|| sim_data_dir().join(format!("{}.json", args.name)));
+fn run_scenario(args: RunArgs) -> Result<()> {
+    let scenario_name = args.scenario.to_lowercase().replace('-', "_");
 
-    let mut sim = NetworkSimulator::new(args.seed);
-    sim.snapshot(&args.name);
-    sim.save_to_file(&path)?;
-
-    p::success(&format!("Snapshot '{}' saved to {}", args.name, path.display()));
-    Ok(())
-}
-
-fn handle_restore(args: RestoreArgs) -> Result<()> {
-    p::header("Restore Simulation State");
-    let sim = NetworkSimulator::load_from_file(&args.path, args.seed)?;
-
-    p::kv("Ledger sequence", &sim.state().ledger_sequence.to_string());
-    p::kv("Contracts", &sim.state().contracts.len().to_string());
-    p::kv("Accounts", &sim.state().accounts.len().to_string());
-    p::kv("Events", &sim.state().events.len().to_string());
-    p::success("State restored successfully");
-    Ok(())
-}
-
-fn handle_time(args: TimeArgs) -> Result<()> {
-    p::header("Simulation Time Control");
-    let mut sim = NetworkSimulator::new(args.seed);
-
-    if let Some(seconds) = args.seconds {
-        sim.advance_time(seconds);
-        p::success(&format!("Advanced virtual time by {} seconds", seconds));
-        p::kv("Timestamp", &sim.state().timestamp.to_string());
-    } else if let Some(ledgers) = args.ledgers {
-        sim.advance_ledger(ledgers);
-        p::success(&format!("Advanced ledger by {} sequences", ledgers));
-        p::kv("Ledger sequence", &sim.state().ledger_sequence.to_string());
-    } else {
-        anyhow::bail!("Specify --seconds or --ledgers to advance time");
-    }
-    Ok(())
-}
-
-fn handle_fail(args: FailArgs) -> Result<()> {
-    p::header("Failure Injection");
-    let mode = parse_failure_mode(&args.mode, args.probability)?;
-    let mut sim = NetworkSimulator::new(args.seed);
-    sim.set_failure_mode(mode.clone());
-
-    p::kv("Mode", &format!("{:?}", mode));
-    p::kv("Seed", &args.seed.to_string());
-
-    match sim.deploy_contract("test_hash") {
-        Ok(id) => {
-            p::success(&format!("Operation succeeded despite mode (deployed {})", id));
-        }
-        Err(e) => {
-            p::warn(&format!("Injected failure triggered: {}", e));
-        }
-    }
-    Ok(())
-}
-
-fn handle_scenario(args: ScenarioArgs) -> Result<()> {
-    if let Some(export_path) = args.export {
-        let scenarios = builtin_scenarios();
-        let name = args
-            .name
-            .as_deref()
-            .unwrap_or("basic-deploy-invoke");
-        let scenario = scenarios
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Built-in scenario '{}' not found", name))?;
-        save_scenario(scenario, &export_path)?;
-        p::success(&format!("Exported scenario to {}", export_path.display()));
-        return Ok(());
-    }
-
-    p::header("Simulation Scenario");
-
-    let scenario = if let Some(ref file) = args.file {
-        load_scenario(file)?
-    } else {
-        let name = args
-            .name
-            .as_deref()
-            .unwrap_or("basic-deploy-invoke");
-        builtin_scenarios()
-            .into_iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Built-in scenario '{}' not found", name))?
+    let built_in = match scenario_name.as_str() {
+        "simple_counter" => BuiltInScenario::SimpleCounter,
+        "token_transfer" => BuiltInScenario::TokenTransfer,
+        "escrow" => BuiltInScenario::Escrow,
+        "multisig_vault" => BuiltInScenario::MultisigVault,
+        "empty" => BuiltInScenario::Empty,
+        "load_test" => BuiltInScenario::LoadTest,
+        _ => anyhow::bail!(
+            "Unknown scenario '{}'. Use 'starforge simulate list-scenarios' to see available ones.",
+            args.scenario
+        ),
     };
 
-    p::kv("Scenario", &scenario.name);
-    p::kv("Description", &scenario.description);
-    p::kv("Steps", &scenario.steps.len().to_string());
-    p::kv("Seed", &scenario.seed.to_string());
-    println!();
+    p::header(&format!("Running Scenario: {}", built_in.name()));
 
-    let mut sim = NetworkSimulator::new(scenario.seed);
-    let result = sim.run_scenario(&scenario);
+    let scenario = ScenarioRunner::load_built_in(built_in, args.seed);
+    let (sim, result) = ScenarioRunner::run(scenario);
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+    // Store in global state.
+    {
+        let mut guard = CURRENT_SIM.lock().unwrap();
+        *guard = Some(sim);
+    }
+    {
+        let mut guard = LAST_RESULT.lock().unwrap();
+        *guard = Some(result.clone());
+    }
+
+    p::kv("Accounts", &result.accounts.len().to_string());
+    p::kv("Contracts", &result.contracts.len().to_string());
+
+    if args.verbose {
+        println!();
+        p::info("Account mappings:");
+        for (name, pk) in &result.accounts {
+            p::kv(&format!("  {}", name), pk);
+        }
+
+        println!();
+        p::info("Contract mappings:");
+        for (name, cid) in &result.contracts {
+            p::kv(&format!("  {}", name), cid);
+        }
+    }
+
+    p::success(&format!("Scenario '{}' loaded and ready", built_in.name()));
+    Ok(())
+}
+
+fn create_scenario(args: CreateArgs) -> Result<()> {
+    let scenario_name = args.scenario.to_lowercase().replace('-', "_");
+
+    let built_in = match scenario_name.as_str() {
+        "simple_counter" => BuiltInScenario::SimpleCounter,
+        "token_transfer" => BuiltInScenario::TokenTransfer,
+        "escrow" => BuiltInScenario::Escrow,
+        "multisig_vault" => BuiltInScenario::MultisigVault,
+        "empty" => BuiltInScenario::Empty,
+        "load_test" => BuiltInScenario::LoadTest,
+        _ => anyhow::bail!("Unknown scenario '{}'", args.scenario),
+    };
+
+    let scenario = ScenarioRunner::load_built_in(built_in, args.seed);
+    let json = serde_json::to_string_pretty(&scenario)?;
+
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&args.output, json)?;
+
+    p::success(&format!(
+        "Scenario '{}' saved to {}",
+        built_in.name(),
+        args.output.display()
+    ));
+    Ok(())
+}
+
+fn import_scenario(args: ImportArgs) -> Result<()> {
+    crate::utils::config::validate_file_path(&args.path, Some("json"))?;
+    let json = std::fs::read_to_string(&args.path)?;
+    let scenario: crate::utils::network_simulator::scenarios::Scenario =
+        serde_json::from_str(&json)?;
+
+    let (sim, result) = ScenarioRunner::run(scenario);
+
+    {
+        let mut guard = CURRENT_SIM.lock().unwrap();
+        *guard = Some(sim);
+    }
+    {
+        let mut guard = LAST_RESULT.lock().unwrap();
+        *guard = Some(result.clone());
+    }
+
+    p::success(&format!(
+        "Imported scenario '{}' with {} accounts and {} contracts",
+        result.scenario_name,
+        result.accounts.len(),
+        result.contracts.len()
+    ));
+
+    if args.verbose {
+        for (name, pk) in &result.accounts {
+            p::kv(&format!("  Account '{}'", name), pk);
+        }
+        for (name, cid) in &result.contracts {
+            p::kv(&format!("  Contract '{}'", name), cid);
+        }
+    }
+
+    Ok(())
+}
+
+// ── Snapshot commands ─────────────────────────────────────────────────────────
+
+fn take_snapshot(args: SnapshotArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    let snap_id = sim.take_snapshot(&args.label);
+    p::success(&format!(
+        "Snapshot '{}' taken (ID: {})",
+        args.label, snap_id
+    ));
+    Ok(())
+}
+
+fn list_snapshots() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let snapshots = sim.snapshot_manager.list();
+
+    if snapshots.is_empty() {
+        p::info("No snapshots available. Take one with: starforge simulate snapshot <label>");
         return Ok(());
     }
 
-    if result.passed {
-        p::success(&format!(
-            "Scenario passed ({}/{} steps)",
-            result.steps_run, result.steps_total
-        ));
-    } else {
-        p::warn(&format!(
-            "Scenario failed at step {}/{}",
-            result.steps_run, result.steps_total
-        ));
-        for err in &result.errors {
-            println!("  {} {}", "✗".red(), err);
+    p::header("State Snapshots");
+    p::separator();
+
+    for (id, label, created_at) in &snapshots {
+        println!(
+            "  {} {} (created: {})",
+            id.cyan().bold(),
+            label,
+            created_at.dimmed()
+        );
+    }
+
+    p::separator();
+    p::kv("Total", &snapshots.len().to_string());
+    Ok(())
+}
+
+fn restore_snapshot(args: RestoreArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    sim.restore_snapshot(&args.id)
+        .map_err(|e| anyhow::anyhow!("Restore failed: {}", e))?;
+    p::success(&format!("State restored from snapshot '{}'", args.id));
+    Ok(())
+}
+
+fn export_snapshot(args: ExportSnapshotArgs) -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    sim.snapshot_manager
+        .export_to_file(&args.id, &args.output)
+        .map_err(|e| anyhow::anyhow!("Export failed: {}", e))?;
+    p::success(&format!(
+        "Snapshot '{}' exported to {}",
+        args.id,
+        args.output.display()
+    ));
+    Ok(())
+}
+
+fn import_snapshot(args: ImportSnapshotArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    let id = sim
+        .snapshot_manager
+        .import_from_file(&args.path)
+        .map_err(|e| anyhow::anyhow!("Import failed: {}", e))?;
+    p::success(&format!(
+        "Snapshot imported from {} with ID '{}'",
+        args.path.display(),
+        id
+    ));
+    Ok(())
+}
+
+// ── Time commands ─────────────────────────────────────────────────────────────
+
+fn show_time() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let tc = &sim.time_controller;
+
+    p::header("Simulation Time");
+    p::separator();
+    p::kv("Ledger Sequence", &tc.ledger_time.sequence.to_string());
+    p::kv("Timestamp", &tc.current_time_string());
+    p::kv("Unix Timestamp", &tc.ledger_time.timestamp.to_string());
+    p::kv("Close Interval", &format!("{}s", tc.ledger_time.close_seconds));
+    p::kv(
+        "Frozen",
+        if tc.ledger_time.frozen { "yes" } else { "no" },
+    );
+
+    let save_points = tc.list_save_points();
+    if !save_points.is_empty() {
+        println!();
+        p::info("Saved time points:");
+        for (label, lt) in save_points {
+            p::kv(&format!("  {}", label), &format!("seq {}", lt.sequence));
         }
     }
-    p::kv("Final ledger", &result.final_ledger.to_string());
+
+    p::separator();
     Ok(())
 }
 
-fn handle_list() -> Result<()> {
-    p::header("Built-in Simulation Scenarios");
-    for scenario in builtin_scenarios() {
-        println!(
-            "  {} {} — {}",
-            "•".cyan(),
-            scenario.name.bright_white(),
-            scenario.description.dimmed()
-        );
-        println!(
-            "    {} steps, seed={}",
-            scenario.steps.len(),
-            scenario.seed
-        );
+fn advance(args: AdvanceArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    sim.advance_ledgers(args.count);
+    p::success(&format!(
+        "Advanced to ledger sequence {}",
+        sim.current_ledger()
+    ));
+    Ok(())
+}
+
+fn jump(args: JumpArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    sim.time_controller.jump_to_sequence(args.sequence);
+    p::success(&format!(
+        "Jumped to ledger sequence {}",
+        sim.time_controller.ledger_time.sequence
+    ));
+    Ok(())
+}
+
+fn toggle_freeze(args: FreezeArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+
+    match args.action.as_str() {
+        "freeze" => {
+            sim.time_controller.freeze();
+            p::success("Time frozen");
+        }
+        "unfreeze" => {
+            sim.time_controller.unfreeze();
+            p::success("Time unfrozen");
+        }
+        _ => anyhow::bail!("Action must be 'freeze' or 'unfreeze'"),
     }
     Ok(())
 }
 
-fn parse_failure_mode(mode: &str, probability: u8) -> Result<FailureMode> {
-    match mode {
-        "none" => Ok(FailureMode::None),
-        "timeout" => Ok(FailureMode::RpcTimeout),
-        "error" => Ok(FailureMode::RpcError),
-        "insufficient_fee" => Ok(FailureMode::InsufficientFee),
-        "contract_not_found" => Ok(FailureMode::ContractNotFound),
-        "random" => Ok(FailureMode::Random {
-            probability_pct: probability.min(100),
-        }),
-        other => anyhow::bail!(
-            "Unknown failure mode '{}'. Use: none, timeout, error, insufficient_fee, contract_not_found, random",
-            other
+fn save_time(args: SaveTimeArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    sim.time_controller.save_point(&args.label);
+    p::success(&format!("Time point '{}' saved", args.label));
+    Ok(())
+}
+
+fn restore_time(args: RestoreTimeArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    if sim.time_controller.restore_point(&args.label).is_some() {
+        p::success(&format!(
+            "Restored time point '{}' (seq {})",
+            args.label,
+            sim.time_controller.ledger_time.sequence
+        ));
+    } else {
+        anyhow::bail!("Time point '{}' not found", args.label);
+    }
+    Ok(())
+}
+
+// ── Failure commands ──────────────────────────────────────────────────────────
+
+fn list_failures() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let injector = &sim.failure_injector;
+
+    p::header("Failure Injection Rules");
+    p::kv("Enabled", if injector.enabled { "yes" } else { "no" });
+    p::separator();
+
+    if injector.rule_count() == 0 {
+        p::info("No failure rules configured.");
+        return Ok(());
+    }
+
+    for rule in injector.rules() {
+        let mode_str = format!("{:?}", rule.mode);
+        println!(
+            "  {} ({}){}",
+            rule.name.cyan().bold(),
+            mode_str,
+            if rule.max_activations > 0 {
+                format!(" [max: {}]", rule.max_activations)
+            } else {
+                String::new()
+            }
+        );
+        if let Some(ref method) = rule.rpc_method_filter {
+            p::kv("    RPC method", method);
+        }
+        if let Some(ref cid) = rule.contract_id_filter {
+            p::kv("    Contract", cid);
+        }
+        if let Some(ref acct) = rule.account_filter {
+            p::kv("    Account", acct);
+        }
+        p::kv("    Probability", &rule.probability.to_string());
+        p::kv("    Fired", &rule.times_fired.to_string());
+    }
+
+    p::separator();
+    Ok(())
+}
+
+fn add_failure(args: AddFailureArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+
+    let mode = match args.mode.as_str() {
+        "rpc-timeout" => FailureMode::RpcTimeout,
+        "connection-refused" => FailureMode::RpcConnectionRefused,
+        "insufficient-fee" => FailureMode::InsufficientFee,
+        "bad-auth" => FailureMode::BadAuth,
+        "contract-panic" => FailureMode::ContractPanic,
+        "account-not-found" => FailureMode::AccountNotFound,
+        "contract-not-found" => FailureMode::ContractNotFound,
+        "insufficient-balance" => FailureMode::InsufficientBalance,
+        "budget-exceeded" => FailureMode::BudgetExceeded,
+        _ => anyhow::bail!(
+            "Unknown failure mode '{}'. Available: rpc-timeout, connection-refused, \
+             insufficient-fee, bad-auth, contract-panic, account-not-found, \
+             contract-not-found, insufficient-balance, budget-exceeded",
+            args.mode
         ),
+    };
+
+    let mut rule = FailureRule::new(&args.name, mode)
+        .with_probability(args.probability.clamp(0.0, 1.0))
+        .with_max_activations(args.max_activations);
+
+    if let Some(ref method) = args.rpc_method {
+        rule = rule.with_rpc_method(method);
     }
+    if let Some(ref cid) = args.contract {
+        rule = rule.with_contract(cid);
+    }
+    if let Some(ref acct) = args.account {
+        rule = rule.with_account(acct);
+    }
+
+    sim.failure_injector.add_rule(rule);
+    sim.failure_injector.enable();
+
+    p::success(&format!("Failure rule '{}' added", args.name));
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn remove_failure(args: RemoveFailureArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
 
-    #[test]
-    fn parse_failure_modes() {
-        assert!(matches!(
-            parse_failure_mode("none", 0).unwrap(),
-            FailureMode::None
-        ));
-        assert!(matches!(
-            parse_failure_mode("random", 30).unwrap(),
-            FailureMode::Random { probability_pct: 30 }
-        ));
+    if sim.failure_injector.remove_rule(&args.name) {
+        p::success(&format!("Failure rule '{}' removed", args.name));
+    } else {
+        p::warn(&format!("Failure rule '{}' not found", args.name));
     }
+    Ok(())
+}
+
+fn toggle_failure(args: ToggleFailureArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+
+    match args.action.as_str() {
+        "enable" => {
+            sim.failure_injector.enable();
+            p::success("Failure injection enabled");
+        }
+        "disable" => {
+            sim.failure_injector.disable();
+            p::success("Failure injection disabled");
+        }
+        _ => anyhow::bail!("Action must be 'enable' or 'disable'"),
+    }
+    Ok(())
+}
+
+// ── Status command ────────────────────────────────────────────────────────────
+
+fn show_status() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let status = sim.get_status();
+
+    p::header("Network Simulator Status");
+    p::separator();
+    p::kv("Mode", status["mode"].as_str().unwrap_or("unknown"));
+    p::kv(
+        "Ledger",
+        &format!(
+            "seq {} | protocol v{}",
+            status["ledger"]["sequence"].as_u64().unwrap_or(0),
+            status["ledger"]["protocol_version"].as_u64().unwrap_or(0)
+        ),
+    );
+    p::kv("Accounts", &status["accounts"].as_u64().unwrap_or(0).to_string());
+    p::kv("Contracts", &status["contracts"].as_u64().unwrap_or(0).to_string());
+    p::kv(
+        "Transactions",
+        &status["transactions"].as_u64().unwrap_or(0).to_string(),
+    );
+    p::kv("Seed", &status["seed"].as_u64().unwrap_or(0).to_string());
+
+    println!();
+    p::info("Time:");
+    p::kv(
+        "  Sequence",
+        &status["time"]["sequence"].as_u64().unwrap_or(0).to_string(),
+    );
+    p::kv(
+        "  Frozen",
+        status["time"]["frozen"].as_bool().unwrap_or(false).to_string().as_str(),
+    );
+    p::kv(
+        "  Failure Injection",
+        status["failure_injection"].as_bool().unwrap_or(false).to_string().as_str(),
+    );
+
+    if let Some(ref result) = *LAST_RESULT.lock().unwrap() {
+        println!();
+        p::info("Last scenario result:");
+        p::kv("  Name", &result.scenario_name);
+        p::kv("  Accounts", &result.accounts.len().to_string());
+        p::kv("  Contracts", &result.contracts.len().to_string());
+    }
+
+    p::separator();
+    Ok(())
+}
+
+// ── Contract commands ─────────────────────────────────────────────────────────
+
+fn deploy_contract(args: DeploySimArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+
+    let contract = sim
+        .deploy_contract(&args.wasm_hash, &args.deployer)
+        .map_err(|e| anyhow::anyhow!("Deployment failed: {}", e))?;
+
+    p::success("Contract deployed");
+    p::kv_accent("Contract ID", &contract.contract_id);
+    p::kv("WASM Hash", &contract.wasm_hash);
+    p::kv("Deployer", &contract.deployer);
+
+    if let Some(name) = &args.name {
+        p::kv("Name", name);
+    }
+
+    Ok(())
+}
+
+fn invoke_contract(args: InvokeSimArgs) -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+
+    // Try to find a source account – use the first account in the simulator.
+    let source = match sim.list_accounts().first() {
+        Some(acct) => acct.public_key.clone(),
+        None => anyhow::bail!("No accounts in simulator. Create one or run a scenario first."),
+    };
+
+    // Simulate first.
+    p::info(&format!(
+        "Simulating {}::{}({})...",
+        &args.contract_id[..8],
+        args.function,
+        args.args.join(", ")
+    ));
+
+    match sim.simulate_invoke(&args.contract_id, &args.function, &args.args, &source) {
+        Ok(outcome) => {
+            p::kv_accent("Return Value", &outcome.return_value);
+            p::kv("Fee (stroops)", &outcome.fee_stroops.to_string());
+            p::kv("Events", &outcome.events.len().to_string());
+            if !outcome.events.is_empty() {
+                for event in &outcome.events {
+                    p::kv("  •", event);
+                }
+            }
+
+            // Submit.
+            p::info("Submitting transaction...");
+            match sim.submit_invoke(
+                &args.contract_id,
+                &args.function,
+                &args.args,
+                &source,
+                outcome.fee_stroops,
+            ) {
+                Ok(receipt) => {
+                    p::success("Transaction submitted");
+                    p::kv_accent("TX Hash", &receipt.hash);
+                    p::kv("Ledger", &receipt.ledger.to_string());
+                    p::kv("Return Value", &receipt.return_value);
+                }
+                Err(e) => {
+                    p::warn(&format!("Submission failed (simulated): {}", e));
+                }
+            }
+        }
+        Err(e) => {
+            p::warn(&format!("Simulation failed (simulated): {}", e));
+        }
+    }
+
+    Ok(())
+}
+
+fn list_accounts() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let accounts = sim.list_accounts();
+
+    if accounts.is_empty() {
+        p::info("No accounts in simulator.");
+        return Ok(());
+    }
+
+    p::header("Simulator Accounts");
+    p::separator();
+
+    for acct in &accounts {
+        println!(
+            "  {}  {:>10.2} XLM  seq:{}",
+            acct.public_key.cyan().bold(),
+            acct.balance,
+            acct.sequence
+        );
+    }
+
+    p::separator();
+    p::kv("Total", &accounts.len().to_string());
+    Ok(())
+}
+
+fn list_contracts() -> Result<()> {
+    let guard = get_or_create_sim();
+    let sim = guard.as_ref().unwrap();
+    let contracts = sim.list_contracts();
+
+    if contracts.is_empty() {
+        p::info("No contracts deployed in simulator.");
+        return Ok(());
+    }
+
+    p::header("Simulator Contracts");
+    p::separator();
+
+    for ctr in &contracts {
+        println!(
+            "  {}  wasm:{}  deployer:{}  storage:{} entries",
+            ctr.contract_id.cyan().bold(),
+            &ctr.wasm_hash[..12],
+            &ctr.deployer[..12],
+            ctr.storage.len()
+        );
+    }
+
+    p::separator();
+    p::kv("Total", &contracts.len().to_string());
+    Ok(())
+}
+
+fn reset_sim() -> Result<()> {
+    let mut guard = get_or_create_sim();
+    let sim = guard.as_mut().unwrap();
+    sim.reset();
+    p::success("Simulator reset to initial state");
+    Ok(())
 }
