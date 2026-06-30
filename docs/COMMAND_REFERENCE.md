@@ -52,6 +52,29 @@ starforge tutorial next
 
 ---
 
+## `multisig`
+
+| Subcommand | Purpose |
+|------------|---------|
+| `wizard` | Interactive transaction proposal builder |
+| `create` | Create a proposal with threshold, signers, metadata, and optional transaction XDR |
+| `status <FILE>` | Show visual signature collection progress |
+| `verify <FILE>` | Validate signatures, duplicates, pending signers, and threshold readiness |
+| `notify <FILE>` | Queue signature request notifications for pending signers |
+| `export <FILE>` / `import <FILE>` | Share proposal JSON between signers |
+| `templates` / `from-template` | Use common scenarios like escrow, company treasury, DAO, vault, and payment |
+
+```bash
+starforge multisig wizard
+starforge multisig create --threshold 2 --signers alice,bob,carol \
+  --title "Treasury payment" --transaction-xdr <XDR>
+starforge multisig status proposal.json
+starforge multisig verify proposal.json
+starforge multisig notify proposal.json --message "Please sign the treasury payment"
+```
+
+---
+
 ## `new`
 
 | Subcommand | Purpose |
