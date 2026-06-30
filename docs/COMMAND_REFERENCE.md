@@ -176,6 +176,28 @@ Fixture suites support named storage fixtures, mocked contract calls, and assert
 
 ---
 
+## `security`
+
+| Subcommand | Purpose |
+|------------|---------|
+| `audit <PATH>` | Run built-in Soroban analysis plus optional Slither/Mythril integrations |
+| `audit --format json\|html --out <FILE>` | Generate machine-readable or HTML audit reports |
+| `audit --ci --min-score <N>` | Fail when the audit score is below the CI threshold |
+| `audit --ci-workflow-out <FILE>` | Generate a GitHub Actions workflow for security audits |
+| `audit --track` | Create remediation tracker items for findings |
+| `remediation list` | Review tracked audit and pentest remediation items |
+
+```bash
+starforge security audit ./contracts/token/src/lib.rs --format html --out audit.html
+starforge security audit ./contracts/token/src/lib.rs --ci --min-score 85
+starforge security audit ./contracts/token/src/lib.rs \
+  --ci-workflow-out .github/workflows/starforge-security.yml
+```
+
+External tools are optional. StarForge runs built-in Soroban heuristics every time and records whether Slither/Mythril were completed, failed, skipped, or unavailable.
+
+---
+
 ## `upgrade`
 
 | Subcommand | Purpose |

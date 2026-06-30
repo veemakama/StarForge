@@ -1,9 +1,9 @@
 use crate::utils::print as p;
 use crate::utils::security::{
-    apply_hardening, default_rules, evaluate_event, format_report, generate_hardening_report,
-    run_audit, run_checklist, run_pentest, track_findings, validate_security, write_report,
-    AnomalyDetector, AuditConfig, HardeningOptions, IncidentResponse, IncidentStore,
-    RemediationStatus, ThreatFeed,
+    apply_hardening, default_rules, evaluate_event, format_html_report, format_report,
+    generate_github_actions_workflow, generate_hardening_report, run_audit, run_checklist,
+    run_pentest, track_findings, validate_security, write_report, AnomalyDetector, AuditConfig,
+    HardeningOptions, IncidentResponse, IncidentStore, RemediationStatus, ThreatFeed,
 };
 use crate::utils::stream::{EventStreamFilters, SorobanEventStream};
 use crate::utils::{config, notifications, soroban};
@@ -49,7 +49,7 @@ pub struct AuditArgs {
     /// Run Mythril if installed
     #[arg(long, default_value = "true")]
     pub mythril: bool,
-    /// Output format: text or json
+    /// Output format: text, json, or html
     #[arg(long, default_value = "text")]
     pub format: String,
     /// Save report to file instead of stdout
@@ -58,6 +58,15 @@ pub struct AuditArgs {
     /// CI mode: exit non-zero if score is below threshold (0-100)
     #[arg(long)]
     pub min_score: Option<f64>,
+    /// CI mode: default minimum score to 80 and fail on unmet threshold
+    #[arg(long, default_value_t = false)]
+    pub ci: bool,
+    /// Write a GitHub Actions workflow that runs this audit
+    #[arg(long)]
+    pub ci_workflow_out: Option<PathBuf>,
+    /// Track findings in the remediation tracker
+    #[arg(long, default_value_t = false)]
+    pub track: bool,
 }
 
 #[derive(Args)]
@@ -388,6 +397,7 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
     };
 
     let result = run_audit(&args.path, &cfg)?;
+    let min_score = args.min_score.or_else(|| args.ci.then_some(80.0));
 
     let score_label = match result.score as u32 {
         90..=100 => "Excellent",
@@ -398,6 +408,7 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
 
     p::separator();
     p::kv("Tools used", &result.tools_used.join(", "));
+    p::kv("CI ready", if result.ci_passed { "yes" } else { "no" });
     p::kv(
         "Security score",
         &format!("{:.1}/100  ({})", result.score, score_label),
@@ -407,6 +418,20 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
     p::kv("Medium  ", &result.summary.medium.to_string());
     p::kv("Low     ", &result.summary.low.to_string());
     p::kv("Info    ", &result.summary.info.to_string());
+
+    println!();
+    p::header("Tool Status");
+    for tool in &result.tool_statuses {
+        let detail = tool
+            .message
+            .as_deref()
+            .map(|message| format!(" - {}", message))
+            .unwrap_or_default();
+        println!(
+            "  {}: {} (findings: {}){}",
+            tool.tool, tool.status, tool.findings, detail
+        );
+    }
 
     if !result.findings.is_empty() {
         println!();
@@ -431,6 +456,34 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
         p::success("No security issues found.");
     }
 
+    if args.track {
+        let tracking_findings: Vec<_> = result
+            .findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding.title.clone(),
+                    finding.severity.clone(),
+                    finding.description.clone(),
+                    finding.remediation.clone(),
+                )
+            })
+            .collect();
+        let created = track_findings("audit", &tracking_findings)?;
+        if !created.is_empty() {
+            p::info(&format!(
+                "Created {} remediation tracking item(s)",
+                created.len()
+            ));
+        }
+    }
+
+    if let Some(path) = &args.ci_workflow_out {
+        let workflow = generate_github_actions_workflow(&args.path, min_score.unwrap_or(80.0));
+        fs::write(path, workflow)?;
+        p::kv("CI workflow", &path.display().to_string());
+    }
+
     match args.format.as_str() {
         "json" => {
             let json = serde_json::to_string_pretty(&result)?;
@@ -441,16 +494,31 @@ fn handle_audit(args: AuditArgs) -> Result<()> {
                 println!("{}", json);
             }
         }
-        _ => {
+        "html" => {
+            let html = format_html_report(&result);
+            if let Some(out) = &args.out {
+                fs::write(out, &html)?;
+                p::kv("Report saved", &out.display().to_string());
+            } else {
+                println!("{}", html);
+            }
+        }
+        "text" => {
             if let Some(out) = &args.out {
                 let text = format_report(&result);
                 fs::write(out, &text)?;
                 p::kv("Report saved", &out.display().to_string());
             }
         }
+        _ => {
+            anyhow::bail!(
+                "Unsupported audit format '{}'. Use text, json, or html.",
+                args.format
+            );
+        }
     }
 
-    if let Some(min) = args.min_score {
+    if let Some(min) = min_score {
         if result.score < min {
             anyhow::bail!(
                 "Security score {:.1} is below required minimum {:.1}",
@@ -506,7 +574,11 @@ fn handle_pentest(args: PentestArgs) -> Result<()> {
     println!();
 
     for r in &report.results {
-        let icon = if r.exploited { "✗".red() } else { "✓".green() };
+        let icon = if r.exploited {
+            "✗".red()
+        } else {
+            "✓".green()
+        };
         println!(
             "  {} [{}] {} ({})",
             icon,
