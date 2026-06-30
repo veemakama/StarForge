@@ -5,6 +5,7 @@ pub mod bindings;
 pub mod call_graph;
 pub mod config;
 pub mod confirmation;
+pub mod contract_testing;
 pub mod crypto;
 pub mod database;
 pub mod deploy_history;

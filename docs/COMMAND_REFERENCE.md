@@ -84,6 +84,30 @@ starforge contract generate-bindings ./token.wasm --lang rust
 
 ---
 
+## `test`
+
+| Flag | Purpose |
+|------|---------|
+| `--wasm <FILE>` | Compiled Soroban WASM under test |
+| `--fixture <FILE>` | JSON/TOML contract test suite with fixtures, mocks, and assertions |
+| `--source <FILE>` | Contract source used for generated tests or coverage |
+| `--coverage` | Include source coverage summary |
+| `--report html\|json\|junit` | Write a test report (`junit` is available for fixture suites) |
+| `--testnet` | Validate Soroban testnet integration for the run |
+| `--testnet-dry-run` | Validate testnet configuration without probing RPC health |
+
+```bash
+starforge test --wasm ./target/contract.wasm \
+  --fixture ./contract-tests.json --coverage --source ./src/lib.rs --report html
+
+starforge test --wasm ./target/contract.wasm \
+  --fixture ./contract-tests.toml --testnet --testnet-dry-run
+```
+
+Fixture suites support named storage fixtures, mocked contract calls, and assertions such as `state_equals`, `state_exists`, `return_equals`, `event_emitted`, `fee_at_most`, and `mock_called`.
+
+---
+
 ## `network` / `node`
 
 | Command | Purpose |
