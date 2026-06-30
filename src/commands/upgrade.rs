@@ -1,6 +1,6 @@
-use crate::utils::{config, confirmation, horizon, print as p};
+use crate::utils::{audit, config, confirmation, horizon, print as p};
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use colored::*;
 use serde::{Deserialize, Serialize};
@@ -19,12 +19,16 @@ pub enum UpgradeCommands {
     Auto(crate::commands::upgrade_auto::UpgradeAutoCommands),
     /// Create a governance proposal for a contract upgrade
     Propose(ProposeArgs),
+    /// Create an emergency upgrade proposal (bypasses timelock)
+    EmergencyPropose(EmergencyProposeArgs),
     /// List pending upgrade proposals
     List(ListArgs),
     /// Show status of upgrade proposals (alias for list)
     Status(ListArgs),
     /// Approve a pending upgrade proposal
     Approve(ApproveArgs),
+    /// Manually unlock a proposal that has passed timelock
+    Unlock(UnlockArgs),
     /// Execute an approved upgrade proposal
     Execute(ExecuteArgs),
     /// Roll back to a previous contract version
@@ -66,6 +70,44 @@ pub struct ProposeArgs {
     /// Number of approvals required before execution (default: 1)
     #[arg(long, default_value_t = 1)]
     pub threshold: u8,
+    /// Timelock duration in seconds (default: 86400 = 24 hours)
+    #[arg(long, default_value_t = 86400)]
+    pub timelock_duration: u64,
+}
+
+#[derive(Args)]
+pub struct EmergencyProposeArgs {
+    /// Contract ID to upgrade
+    #[arg(long)]
+    pub contract_id: String,
+    /// Path to the new compiled .wasm file
+    #[arg(long)]
+    pub wasm: PathBuf,
+    /// Human-readable description of the emergency upgrade
+    #[arg(long)]
+    pub description: String,
+    /// Wallet name to use for signing
+    #[arg(long)]
+    pub wallet: Option<String>,
+    /// Network to use
+    #[arg(long, default_value = "testnet", value_parser = ["testnet", "mainnet"])]
+    pub network: String,
+    /// Number of approvals required before execution (default: 1)
+    #[arg(long, default_value_t = 1)]
+    pub threshold: u8,
+}
+
+#[derive(Args)]
+pub struct UnlockArgs {
+    /// Proposal ID to unlock
+    #[arg(long)]
+    pub proposal_id: String,
+    /// Wallet name to use for signing
+    #[arg(long)]
+    pub wallet: Option<String>,
+    /// Network to use
+    #[arg(long, default_value = "testnet", value_parser = ["testnet", "mainnet"])]
+    pub network: String,
 }
 
 #[derive(Args)]
@@ -142,6 +184,8 @@ pub struct HistoryArgs {
 pub enum ProposalStatus {
     Pending,
     Approved,
+    Timelocked,
+    Unlocked,
     Executed,
     Rejected,
     Expired,
@@ -152,6 +196,8 @@ impl std::fmt::Display for ProposalStatus {
         match self {
             ProposalStatus::Pending => write!(f, "pending"),
             ProposalStatus::Approved => write!(f, "approved"),
+            ProposalStatus::Timelocked => write!(f, "timelocked"),
+            ProposalStatus::Unlocked => write!(f, "unlocked"),
             ProposalStatus::Executed => write!(f, "executed"),
             ProposalStatus::Rejected => write!(f, "rejected"),
             ProposalStatus::Expired => write!(f, "expired"),
@@ -172,6 +218,9 @@ pub struct UpgradeProposal {
     pub network: String,
     pub created_at: String,
     pub executed_at: Option<String>,
+    pub timelock_start: Option<String>,
+    pub timelock_duration_sec: Option<u64>,
+    pub is_emergency: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,9 +326,11 @@ pub async fn handle(cmd: UpgradeCommands) -> Result<()> {
         UpgradeCommands::Prepare(args) => handle_prepare(args).await,
         UpgradeCommands::Auto(cmd) => crate::commands::upgrade_auto::handle(cmd).await,
         UpgradeCommands::Propose(args) => handle_propose(args),
+        UpgradeCommands::EmergencyPropose(args) => handle_emergency_propose(args),
         UpgradeCommands::List(args) => handle_list(args),
         UpgradeCommands::Status(args) => handle_list(args), // Alias for list
         UpgradeCommands::Approve(args) => handle_approve(args),
+        UpgradeCommands::Unlock(args) => handle_unlock(args),
         UpgradeCommands::Execute(args) => handle_execute(args).await,
         UpgradeCommands::Rollback(args) => handle_rollback(args),
         UpgradeCommands::History(args) => handle_history(args),
@@ -302,7 +353,8 @@ async fn handle_prepare(args: PrepareArgs) -> Result<()> {
     let wallet = cfg.wallets.first().ok_or_else(|| {
         anyhow::anyhow!("No wallets found. Create one with `starforge wallet create`")
     })?;
-    horizon::fetch_account(&wallet.public_key, &args.network).await
+    horizon::fetch_account(&wallet.public_key, &args.network)
+        .await
         .map_err(|e| anyhow::anyhow!("Account not active on {}: {}", args.network, e))?;
 
     p::step(3, 3, "Generating upgrade command…");
@@ -356,6 +408,12 @@ fn handle_propose(args: ProposeArgs) -> Result<()> {
         );
     }
 
+    let (status, timelock_start) = if args.threshold <= 1 {
+        (ProposalStatus::Timelocked, Some(Utc::now().to_rfc3339()))
+    } else {
+        (ProposalStatus::Pending, None)
+    };
+
     let proposal = UpgradeProposal {
         id: proposal_id.clone(),
         contract_id: args.contract_id.clone(),
@@ -364,18 +422,37 @@ fn handle_propose(args: ProposeArgs) -> Result<()> {
         proposer: wallet.public_key.clone(),
         approvals: vec![wallet.public_key.clone()], // proposer auto-approves
         threshold: args.threshold,
-        status: if args.threshold <= 1 {
-            ProposalStatus::Approved
-        } else {
-            ProposalStatus::Pending
-        },
+        status,
         network: args.network.clone(),
         created_at: Utc::now().to_rfc3339(),
         executed_at: None,
+        timelock_start,
+        timelock_duration_sec: Some(args.timelock_duration),
+        is_emergency: false,
     };
 
     proposals.push(proposal);
     save_proposals(&proposals)?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert("contract_id".to_string(), args.contract_id.clone());
+    details.insert("new_wasm_hash".to_string(), new_hash.clone());
+    details.insert("description".to_string(), args.description);
+    details.insert("threshold".to_string(), args.threshold.to_string());
+    details.insert(
+        "timelock_duration_sec".to_string(),
+        args.timelock_duration.to_string(),
+    );
+    audit::log_action(
+        "propose_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &proposal_id,
+        details,
+        true,
+        None,
+    )?;
 
     println!();
     p::separator();
@@ -386,9 +463,115 @@ fn handle_propose(args: ProposeArgs) -> Result<()> {
     p::kv("Proposer", &wallet.public_key);
     p::kv("Threshold", &args.threshold.to_string());
     p::kv(
+        "Timelock duration",
+        &format!("{} seconds", args.timelock_duration),
+    );
+    p::kv(
         "Status",
         if args.threshold <= 1 {
-            "approved (auto)"
+            "timelocked (auto-approved)"
+        } else {
+            "pending"
+        },
+    );
+    println!();
+    if args.threshold <= 1 {
+        let unlock_time = Utc::now() + chrono::Duration::seconds(args.timelock_duration as i64);
+        p::info(&format!(
+            "Proposal is timelocked until {}. Unlock with: starforge upgrade unlock --proposal-id {}",
+            unlock_time, proposal_id
+        ));
+    } else {
+        p::info(&format!(
+            "Needs {} more approval(s): starforge upgrade approve --proposal-id {}",
+            args.threshold - 1,
+            proposal_id
+        ));
+    }
+    p::separator();
+    Ok(())
+}
+
+fn handle_emergency_propose(args: EmergencyProposeArgs) -> Result<()> {
+    p::header("Create Emergency Upgrade Proposal");
+
+    config::validate_contract_id(&args.contract_id)?;
+    config::validate_network(&args.network)?;
+
+    p::step(1, 3, "Validating WASM…");
+    let (_, new_hash) = validate_wasm(&args.wasm)?;
+
+    p::step(2, 3, "Loading wallet…");
+    let cfg = config::load()?;
+    let wallet = resolve_wallet(&cfg, args.wallet.as_deref())?;
+
+    p::step(3, 3, "Saving proposal…");
+    let proposal_id = format!("prop-{}", &new_hash[..12]);
+
+    // Check for duplicate
+    let mut proposals = load_proposals()?;
+    if proposals.iter().any(|p| p.id == proposal_id) {
+        anyhow::bail!(
+            "A proposal for this WASM hash already exists: {}",
+            proposal_id
+        );
+    }
+
+    let status = if args.threshold <= 1 {
+        ProposalStatus::Unlocked
+    } else {
+        ProposalStatus::Pending
+    };
+
+    let proposal = UpgradeProposal {
+        id: proposal_id.clone(),
+        contract_id: args.contract_id.clone(),
+        new_wasm_hash: new_hash.clone(),
+        description: args.description.clone(),
+        proposer: wallet.public_key.clone(),
+        approvals: vec![wallet.public_key.clone()], // proposer auto-approves
+        threshold: args.threshold,
+        status,
+        network: args.network.clone(),
+        created_at: Utc::now().to_rfc3339(),
+        executed_at: None,
+        timelock_start: None,
+        timelock_duration_sec: None,
+        is_emergency: true,
+    };
+
+    proposals.push(proposal);
+    save_proposals(&proposals)?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert("contract_id".to_string(), args.contract_id.clone());
+    details.insert("new_wasm_hash".to_string(), new_hash.clone());
+    details.insert("description".to_string(), args.description);
+    details.insert("threshold".to_string(), args.threshold.to_string());
+    audit::log_action(
+        "propose_emergency_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &proposal_id,
+        details,
+        true,
+        None,
+    )?;
+
+    println!();
+    p::separator();
+    p::kv_accent("Proposal ID", &proposal_id);
+    p::kv("Contract ID", &args.contract_id);
+    p::kv("New hash", &new_hash);
+    p::kv("Description", &args.description);
+    p::kv("Proposer", &wallet.public_key);
+    p::kv("Threshold", &args.threshold.to_string());
+    p::kv("Emergency", "true");
+    p::kv(
+        "Status",
+        if args.threshold <= 1 {
+            "unlocked (ready to execute)"
         } else {
             "pending"
         },
@@ -432,19 +615,22 @@ fn handle_list(args: ListArgs) -> Result<()> {
 
     p::separator();
     println!(
-        "  {:<16}  {:<14}  {:<10}  {:<10}  {}",
+        "  {:<16}  {:<14}  {:<12}  {:<10}  {:<10}  {}",
         "Proposal ID".dimmed(),
         "Contract".dimmed(),
         "Status".dimmed(),
+        "Emergency".dimmed(),
         "Approvals".dimmed(),
         "Created".dimmed(),
     );
-    println!("  {}", "─".repeat(72).dimmed());
+    println!("  {}", "─".repeat(80).dimmed());
 
     for prop in &filtered {
         let status_colored = match prop.status {
             ProposalStatus::Pending => prop.status.to_string().yellow().to_string(),
             ProposalStatus::Approved => prop.status.to_string().cyan().to_string(),
+            ProposalStatus::Timelocked => prop.status.to_string().magenta().to_string(),
+            ProposalStatus::Unlocked => prop.status.to_string().cyan().to_string(),
             ProposalStatus::Executed => prop.status.to_string().green().to_string(),
             ProposalStatus::Rejected | ProposalStatus::Expired => {
                 prop.status.to_string().red().to_string()
@@ -452,11 +638,17 @@ fn handle_list(args: ListArgs) -> Result<()> {
         };
         let approvals = format!("{}/{}", prop.approvals.len(), prop.threshold);
         let created = prop.created_at.get(..10).unwrap_or(&prop.created_at);
+        let emergency_flag = if prop.is_emergency {
+            "yes".red().to_string()
+        } else {
+            "no".dimmed().to_string()
+        };
         println!(
-            "  {:<16}  {:<14}  {:<10}  {:<10}  {}",
+            "  {:<16}  {:<14}  {:<12}  {:<10}  {:<10}  {}",
             prop.id.white(),
             short_id(&prop.contract_id).cyan(),
             status_colored,
+            emergency_flag,
             approvals.white(),
             created.dimmed(),
         );
@@ -500,12 +692,31 @@ fn handle_approve(args: ApproveArgs) -> Result<()> {
 
     proposal.approvals.push(wallet.public_key.clone());
     if proposal.approvals.len() >= proposal.threshold as usize {
-        proposal.status = ProposalStatus::Approved;
+        if proposal.is_emergency {
+            proposal.status = ProposalStatus::Unlocked;
+        } else {
+            proposal.status = ProposalStatus::Timelocked;
+            proposal.timelock_start = Some(Utc::now().to_rfc3339());
+        }
     }
 
     let new_status = proposal.status.to_string();
     let approvals = format!("{}/{}", proposal.approvals.len(), proposal.threshold);
     save_proposals(&proposals)?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert("approvals".to_string(), approvals.clone());
+    details.insert("new_status".to_string(), new_status.clone());
+    audit::log_action(
+        "approve_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &args.proposal_id,
+        details,
+        true,
+        None,
+    )?;
 
     println!();
     p::kv_accent("Proposal", &args.proposal_id);
@@ -513,13 +724,107 @@ fn handle_approve(args: ApproveArgs) -> Result<()> {
     p::kv("Approvals", &approvals);
     p::kv("Status", &new_status);
     println!();
-    if new_status == "approved" {
-        p::success("Threshold reached — ready to execute.");
+    if new_status == "timelocked" {
+        let unlock_time = DateTime::parse_from_rfc3339(proposal.timelock_start.as_ref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(proposal.timelock_duration_sec.unwrap() as i64);
+        p::success(&format!(
+            "Threshold reached — proposal is timelocked until {}",
+            unlock_time
+        ));
+        p::info(&format!(
+            "Unlock after timelock: starforge upgrade unlock --proposal-id {}",
+            args.proposal_id
+        ));
+    } else if new_status == "unlocked" {
+        p::success("Threshold reached — emergency proposal is ready to execute.");
         p::info(&format!(
             "starforge upgrade execute --proposal-id {}",
             args.proposal_id
         ));
     }
+    Ok(())
+}
+
+fn handle_unlock(args: UnlockArgs) -> Result<()> {
+    p::header("Unlock Upgrade Proposal");
+    config::validate_network(&args.network)?;
+
+    let cfg = config::load()?;
+    let wallet = resolve_wallet(&cfg, args.wallet.as_deref())?;
+
+    let mut proposals = load_proposals()?;
+    let proposal = proposals
+        .iter_mut()
+        .find(|p| p.id == args.proposal_id && p.network == args.network)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Proposal '{}' not found on {}",
+                args.proposal_id,
+                args.network
+            )
+        })?;
+
+    if proposal.status != ProposalStatus::Timelocked {
+        anyhow::bail!(
+            "Proposal '{}' is not timelocked (status: {})",
+            args.proposal_id,
+            proposal.status
+        );
+    }
+
+    // Check timelock has passed
+    let timelock_start = DateTime::parse_from_rfc3339(
+        proposal
+            .timelock_start
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No timelock start time found"))?,
+    )
+    .unwrap()
+    .with_timezone(&Utc);
+    let timelock_duration = proposal
+        .timelock_duration_sec
+        .ok_or_else(|| anyhow::anyhow!("No timelock duration found"))?;
+    let unlock_time = timelock_start + chrono::Duration::seconds(timelock_duration as i64);
+    let now = Utc::now();
+
+    if now < unlock_time {
+        anyhow::bail!("Timelock has not passed yet. Unlock time: {}", unlock_time);
+    }
+
+    proposal.status = ProposalStatus::Unlocked;
+    save_proposals(&proposals)?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert(
+        "timelock_start".to_string(),
+        proposal.timelock_start.as_ref().unwrap().clone(),
+    );
+    details.insert(
+        "timelock_duration_sec".to_string(),
+        timelock_duration.to_string(),
+    );
+    audit::log_action(
+        "unlock_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &args.proposal_id,
+        details,
+        true,
+        None,
+    )?;
+
+    println!();
+    p::kv_accent("Proposal", &args.proposal_id);
+    p::kv("Status", "unlocked");
+    println!();
+    p::success("Proposal unlocked — ready to execute.");
+    p::info(&format!(
+        "starforge upgrade execute --proposal-id {}",
+        args.proposal_id
+    ));
     Ok(())
 }
 
@@ -542,12 +847,11 @@ async fn handle_execute(args: ExecuteArgs) -> Result<()> {
             )
         })?;
 
-    if proposal.status != ProposalStatus::Approved {
+    if proposal.status != ProposalStatus::Unlocked {
         anyhow::bail!(
-            "Proposal '{}' is not approved (status: {}). It needs {} approval(s).",
+            "Proposal '{}' is not unlocked (status: {}).",
             args.proposal_id,
-            proposal.status,
-            proposal.threshold
+            proposal.status
         );
     }
 
@@ -595,7 +899,8 @@ async fn handle_execute(args: ExecuteArgs) -> Result<()> {
 
     println!();
     p::step(1, 2, "Verifying account on-chain…");
-    horizon::fetch_account(&wallet.public_key, &args.network).await
+    horizon::fetch_account(&wallet.public_key, &args.network)
+        .await
         .map_err(|e| anyhow::anyhow!("Account not active on {}: {}", args.network, e))?;
 
     p::step(2, 2, "Generating upgrade command…");
@@ -620,6 +925,24 @@ async fn handle_execute(args: ExecuteArgs) -> Result<()> {
     proposal.status = ProposalStatus::Executed;
     proposal.executed_at = Some(Utc::now().to_rfc3339());
     save_proposals(&proposals)?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert("contract_id".to_string(), contract_id.clone());
+    details.insert("new_wasm_hash".to_string(), new_wasm_hash.clone());
+    details.insert(
+        "is_emergency".to_string(),
+        proposal.is_emergency.to_string(),
+    );
+    audit::log_action(
+        "execute_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &proposal.id,
+        details,
+        true,
+        None,
+    )?;
 
     println!();
     p::separator();
@@ -664,6 +987,24 @@ fn handle_rollback(args: RollbackArgs) -> Result<()> {
             "Hash '{}' not found in upgrade history for contract '{}' on {}.\nRun `starforge upgrade history --contract-id {}` to see available versions.",
             args.to_hash, args.contract_id, args.network, args.contract_id
         ))?;
+
+    // Log audit action
+    let mut details = std::collections::HashMap::new();
+    details.insert("contract_id".to_string(), args.contract_id.clone());
+    details.insert("rollback_to_hash".to_string(), args.to_hash.clone());
+    details.insert(
+        "original_proposal_id".to_string(),
+        target.proposal_id.clone(),
+    );
+    audit::log_action(
+        "rollback_upgrade",
+        &wallet.public_key,
+        "upgrade_proposal",
+        &target.proposal_id,
+        details,
+        true,
+        None,
+    )?;
 
     p::separator();
     p::kv("Contract ID", &args.contract_id);
@@ -820,6 +1161,10 @@ mod tests {
     fn proposal_status_display() {
         assert_eq!(ProposalStatus::Pending.to_string(), "pending");
         assert_eq!(ProposalStatus::Approved.to_string(), "approved");
+        assert_eq!(ProposalStatus::Timelocked.to_string(), "timelocked");
+        assert_eq!(ProposalStatus::Unlocked.to_string(), "unlocked");
         assert_eq!(ProposalStatus::Executed.to_string(), "executed");
+        assert_eq!(ProposalStatus::Rejected.to_string(), "rejected");
+        assert_eq!(ProposalStatus::Expired.to_string(), "expired");
     }
 }
