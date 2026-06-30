@@ -200,9 +200,126 @@ fn main() {
     );
 
     if let Err(e) = result {
-        eprintln!("\n  {} {}\n", "✗ Error:".red().bold(), e);
+        let hints = recovery_hints(&command_name, &e);
+        utils::print::cli_error(&e, &hints.iter().map(String::as_str).collect::<Vec<_>>());
         std::process::exit(1);
     }
+}
+
+/// Returns command-specific recovery hints for the error sink.
+///
+/// Hints are chosen based on the command that failed and the error message text
+/// so users get actionable next steps instead of a raw error dump.
+fn recovery_hints(command: &str, err: &anyhow::Error) -> Vec<String> {
+    let msg = err.to_string().to_lowercase();
+    let mut hints: Vec<String> = Vec::new();
+
+    match command {
+        "wallet" => {
+            if msg.contains("not found") || msg.contains("no wallet") {
+                hints.push("Create a wallet first: starforge wallet create <name>".into());
+                hints.push("List existing wallets: starforge wallet list".into());
+            } else if msg.contains("password") || msg.contains("decrypt") {
+                hints.push("Re-enter the password you used when creating the wallet.".into());
+                hints.push("If you forgot it, remove the wallet and create a new one: starforge wallet remove <name>".into());
+            } else if msg.contains("fund") || msg.contains("friendbot") {
+                hints.push("Fund a testnet wallet: starforge wallet fund <name>".into());
+                hints.push("Friendbot is only available on testnet — switch networks: starforge network switch testnet".into());
+            } else if msg.contains("already exists") {
+                hints.push("Use a different wallet name, or remove the existing one first.".into());
+                hints.push("List wallets: starforge wallet list".into());
+            }
+        }
+        "deploy" => {
+            if msg.contains("wasm") || msg.contains("not found") || msg.contains("no such file") {
+                hints.push("Build your contract first: stellar contract build".into());
+                hints.push("Make sure you pass the correct --wasm path to deploy.".into());
+            } else if msg.contains("account") || msg.contains("not found on") {
+                hints.push("Fund your account before deploying: starforge wallet fund <name>".into());
+                hints.push("Check the active network: starforge network show".into());
+            } else if msg.contains("network") {
+                hints.push("Check available networks: starforge network show".into());
+                hints.push("Switch to testnet for free deployments: starforge network switch testnet".into());
+            }
+        }
+        "contract" => {
+            if msg.contains("no wallet") || msg.contains("wallet not found") {
+                hints.push("Create a wallet first: starforge wallet create deployer --fund".into());
+            } else if msg.contains("contract id") || msg.contains("invalid contract") {
+                hints.push("Contract IDs start with 'C' and are exactly 56 characters long.".into());
+                hints.push("Find your contract ID in the deploy output or: starforge contract list".into());
+            } else if msg.contains("invoke") || msg.contains("simulate") {
+                hints.push("Run `stellar contract build` to ensure the contract is up to date.".into());
+                hints.push("Check function name and argument types match the contract ABI.".into());
+            }
+        }
+        "tx" => {
+            if msg.contains("account not found") || msg.contains("not active") {
+                hints.push("Fund your account first: starforge wallet fund <name>".into());
+                hints.push("Verify you are on the right network: starforge network show".into());
+            } else if msg.contains("insufficient") {
+                hints.push("Check your XLM balance: starforge wallet show <name>".into());
+                hints.push("Fund the account: starforge wallet fund <name>".into());
+            } else if msg.contains("asset") {
+                hints.push("Asset format is CODE:ISSUER (e.g. USDC:GA5ZS...) or XLM for native.".into());
+            }
+        }
+        "network" => {
+            if msg.contains("unsupported") || msg.contains("not found") {
+                hints.push("List configured networks: starforge network show".into());
+                hints.push("Add a custom network: starforge network add <name> --horizon <url>".into());
+                hints.push("Valid built-in networks: testnet, mainnet, docker-testnet".into());
+            }
+        }
+        "node" => {
+            if msg.contains("docker") || msg.contains("not found") || msg.contains("command") {
+                hints.push("Install Docker Desktop from https://www.docker.com/products/docker-desktop".into());
+                hints.push("Ensure the Docker daemon is running before retrying.".into());
+            }
+        }
+        "config" => {
+            if msg.contains("parse") || msg.contains("toml") || msg.contains("json") {
+                hints.push("Your config file may be corrupted. Inspect it at: ~/.config/starforge/config.toml".into());
+                hints.push("Run `starforge config doctor` to diagnose configuration issues.".into());
+            }
+        }
+        "plugin" => {
+            if msg.contains("not found") || msg.contains("load") {
+                hints.push("Re-install the plugin: starforge plugin install <name> --path <lib>".into());
+                hints.push("List installed plugins: starforge plugin list".into());
+            } else if msg.contains("untrusted") || msg.contains("trust") {
+                hints.push("Review the plugin source and mark it trusted: starforge plugin trust <name>".into());
+            }
+        }
+        "template" => {
+            if msg.contains("not found") || msg.contains("fetch") {
+                hints.push("List available templates: starforge template search".into());
+                hints.push("Check your internet connection and retry.".into());
+            }
+        }
+        "benchmark" | "test" => {
+            if msg.contains("wasm") || msg.contains("not found") {
+                hints.push("Build your contract first: stellar contract build".into());
+                hints.push("Pass the correct --wasm path to the command.".into());
+            }
+        }
+        _ => {}
+    }
+
+    // Generic fallbacks always appended when nothing command-specific matched
+    if hints.is_empty() {
+        if msg.contains("permission denied") || msg.contains("access denied") {
+            hints.push("Check file and directory permissions.".into());
+        } else if msg.contains("connection") || msg.contains("network") || msg.contains("timeout") {
+            hints.push("Check your internet connection and try again.".into());
+            hints.push("If behind a proxy, set the HTTPS_PROXY environment variable.".into());
+        } else if msg.contains("config") {
+            hints.push("Run `starforge config doctor` to diagnose configuration issues.".into());
+        }
+        // If still nothing, the cli_error fn will print the generic fallback.
+    }
+
+    hints
 }
 
 fn handle_external_plugin(args: Vec<String>) -> anyhow::Result<()> {

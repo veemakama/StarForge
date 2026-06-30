@@ -39,17 +39,41 @@ pub fn fund_account(public_key: &str, network: &str) -> Result<()> {
     let url = format!("{}{}addr={}", friendbot, separator, public_key);
     let res = match ureq::get(&url).call() {
         Ok(res) => res,
+        Err(ureq::Error::Status(400, _)) => {
+            anyhow::bail!(
+                "Friendbot rejected the funding request for '{}'.\n\
+                 This usually means the account has already been funded on {}.\n\
+                 Check the balance: starforge wallet show",
+                public_key,
+                network
+            )
+        }
         Err(ureq::Error::Status(status, _)) => {
-            anyhow::bail!("Friendbot returned status {}", status)
+            anyhow::bail!(
+                "Friendbot returned HTTP {} for network '{}'.\n\
+                 Friendbot is only available on testnet — verify your active network: starforge network show",
+                status,
+                network
+            )
         }
         Err(error) => {
-            return Err(error).with_context(|| format!("Friendbot request failed for {}", network))
+            return Err(error).with_context(|| {
+                format!(
+                    "Could not reach Friendbot on '{}'. Check your internet connection.",
+                    network
+                )
+            })
         }
     };
     if res.status() == 200 {
         Ok(())
     } else {
-        anyhow::bail!("Friendbot returned status {}", res.status())
+        anyhow::bail!(
+            "Friendbot returned HTTP {} for network '{}'.\n\
+             Friendbot is only available on testnet — verify your active network: starforge network show",
+            res.status(),
+            network
+        )
     }
 }
 
@@ -58,14 +82,32 @@ pub fn fetch_account(public_key: &str, network: &str) -> Result<AccountResponse>
     let url = format!("{}/accounts/{}", horizon, public_key);
     let res = ureq::get(&url)
         .call()
-        .with_context(|| format!("Failed to reach Horizon on {}", network))?;
+        .with_context(|| {
+            format!(
+                "Could not reach Horizon on '{}'. Check your internet connection or run: starforge network test",
+                network
+            )
+        })?;
     if res.status() == 200 {
         let account: AccountResponse = res
             .into_json()
-            .with_context(|| "Failed to parse account response")?;
+            .with_context(|| "Failed to parse account response from Horizon")?;
         Ok(account)
+    } else if res.status() == 404 {
+        anyhow::bail!(
+            "Account '{}' not found on {}.\n\
+             The account may not have been activated yet.\n\
+             Fund it with: starforge wallet fund",
+            public_key,
+            network
+        )
     } else {
-        anyhow::bail!("Account not found on {}", network)
+        anyhow::bail!(
+            "Horizon returned HTTP {} for account '{}' on {}",
+            res.status(),
+            public_key,
+            network
+        )
     }
 }
 
