@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -31,7 +31,24 @@ impl Database {
 
     pub fn initialize(&self) -> Result<()> {
         self.conn.execute_batch(SCHEMA)?;
+        self.ensure_column("wallets", "secret_key", "TEXT")?;
+        self.ensure_column("wallets", "rotation_history", "TEXT NOT NULL DEFAULT '[]'")?;
         self.set_meta("schema_version", "1")?;
+        Ok(())
+    }
+
+    fn ensure_column(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({})", table))?;
+        let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for existing in columns {
+            if existing? == column {
+                return Ok(());
+            }
+        }
+        self.conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
         Ok(())
     }
 
@@ -56,14 +73,16 @@ impl Database {
     pub fn insert_wallet(&self, wallet: &WalletRow) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO wallets \
-             (name, public_key, network, created_at, funded) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (name, public_key, secret_key, network, created_at, funded, rotation_history) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 wallet.name,
                 wallet.public_key,
+                wallet.secret_key,
                 wallet.network,
                 wallet.created_at,
                 wallet.funded,
+                wallet.rotation_history,
             ],
         )?;
         Ok(())
@@ -71,15 +90,17 @@ impl Database {
 
     pub fn list_wallets(&self) -> Result<Vec<WalletRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name, public_key, network, created_at, funded FROM wallets ORDER BY created_at",
+            "SELECT name, public_key, secret_key, network, created_at, funded, rotation_history FROM wallets ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(WalletRow {
                 name: row.get(0)?,
                 public_key: row.get(1)?,
-                network: row.get(2)?,
-                created_at: row.get(3)?,
-                funded: row.get(4)?,
+                secret_key: row.get(2)?,
+                network: row.get(3)?,
+                created_at: row.get(4)?,
+                funded: row.get(5)?,
+                rotation_history: row.get(6)?,
             })
         })?;
         rows.map(|r| r.map_err(anyhow::Error::from)).collect()
@@ -87,16 +108,18 @@ impl Database {
 
     pub fn get_wallet(&self, name: &str) -> Result<Option<WalletRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name, public_key, network, created_at, funded FROM wallets WHERE name = ?1",
+            "SELECT name, public_key, secret_key, network, created_at, funded, rotation_history FROM wallets WHERE name = ?1",
         )?;
         let mut rows = stmt.query(params![name])?;
         if let Some(row) = rows.next()? {
             Ok(Some(WalletRow {
                 name: row.get(0)?,
                 public_key: row.get(1)?,
-                network: row.get(2)?,
-                created_at: row.get(3)?,
-                funded: row.get(4)?,
+                secret_key: row.get(2)?,
+                network: row.get(3)?,
+                created_at: row.get(4)?,
+                funded: row.get(5)?,
+                rotation_history: row.get(6)?,
             }))
         } else {
             Ok(None)
@@ -169,6 +192,123 @@ impl Database {
         rows.map(|r| r.map_err(anyhow::Error::from)).collect()
     }
 
+    pub fn has_config(&self) -> Result<bool> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM config_kv", [], |row| row.get(0))
+            .unwrap_or(0);
+        Ok(count > 0)
+    }
+
+    pub fn load_config(&self) -> Result<crate::utils::config::Config> {
+        use crate::utils::config::{
+            Config, NetworkConfig, PluginTrustConfig, WalletEntry, WalletRotationRecord,
+        };
+        use std::collections::HashMap;
+
+        let mut cfg = Config::default();
+        if let Some(version) = self.get_config_kv("schema_version")? {
+            cfg.version = version;
+        }
+        if let Some(network) = self.get_config_kv("network")? {
+            cfg.network = network;
+        }
+        if let Some(telemetry) = self.get_config_kv("telemetry_enabled")? {
+            cfg.telemetry_enabled = telemetry.parse::<bool>().ok();
+        }
+        if let Some(plugin_trust) = self.get_config_kv("plugin_trust.trusted_sources")? {
+            cfg.plugin_trust = PluginTrustConfig {
+                trusted_sources: serde_json::from_str(&plugin_trust)?,
+            };
+        }
+        if let Some(wallet_encryption) = self.get_config_kv("wallet_encryption")? {
+            cfg.wallet_encryption = Some(serde_json::from_str(&wallet_encryption)?);
+        }
+
+        cfg.networks = self
+            .list_networks()?
+            .into_iter()
+            .map(|net| {
+                (
+                    net.name,
+                    NetworkConfig {
+                        horizon_url: net.horizon_url,
+                        soroban_rpc_url: net.soroban_rpc_url,
+                        friendbot_url: net.friendbot_url,
+                        passphrase: net.passphrase,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        cfg.wallets = self
+            .list_wallets()?
+            .into_iter()
+            .map(|wallet| {
+                let rotation_history: Vec<WalletRotationRecord> =
+                    serde_json::from_str(&wallet.rotation_history).unwrap_or_default();
+                WalletEntry {
+                    name: wallet.name,
+                    public_key: wallet.public_key,
+                    secret_key: wallet.secret_key,
+                    network: wallet.network,
+                    created_at: wallet.created_at,
+                    funded: wallet.funded,
+                    rotation_history,
+                }
+            })
+            .collect();
+
+        Ok(cfg)
+    }
+
+    pub fn save_config(&self, cfg: &crate::utils::config::Config) -> Result<()> {
+        self.initialize()?;
+        self.conn.execute_batch(
+            "DELETE FROM wallets;
+             DELETE FROM networks;
+             DELETE FROM config_kv;",
+        )?;
+
+        for wallet in &cfg.wallets {
+            self.insert_wallet(&WalletRow {
+                name: wallet.name.clone(),
+                public_key: wallet.public_key.clone(),
+                secret_key: wallet.secret_key.clone(),
+                network: wallet.network.clone(),
+                created_at: wallet.created_at.clone(),
+                funded: wallet.funded,
+                rotation_history: serde_json::to_string(&wallet.rotation_history)?,
+            })?;
+        }
+
+        for (name, net) in &cfg.networks {
+            self.insert_network(&NetworkRow {
+                name: name.clone(),
+                horizon_url: net.horizon_url.clone(),
+                soroban_rpc_url: net.soroban_rpc_url.clone(),
+                friendbot_url: net.friendbot_url.clone(),
+                passphrase: net.passphrase.clone(),
+            })?;
+        }
+
+        self.insert_config_kv("network", &cfg.network)?;
+        self.insert_config_kv("schema_version", &cfg.version)?;
+        if let Some(telemetry) = cfg.telemetry_enabled {
+            self.insert_config_kv("telemetry_enabled", &telemetry.to_string())?;
+        }
+        self.insert_config_kv(
+            "plugin_trust.trusted_sources",
+            &serde_json::to_string(&cfg.plugin_trust.trusted_sources)?,
+        )?;
+        if let Some(kdf) = &cfg.wallet_encryption {
+            self.insert_config_kv("wallet_encryption", &serde_json::to_string(kdf)?)?;
+        }
+        self.set_meta("updated_at", &chrono::Utc::now().to_rfc3339())?;
+
+        Ok(())
+    }
+
     pub fn execute_query(&self, sql: &str) -> Result<QueryResult> {
         if sql.trim_start().to_ascii_lowercase().starts_with("select") {
             let mut stmt = self.conn.prepare(sql)?;
@@ -224,7 +364,25 @@ impl Database {
     pub fn integrity_check(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("PRAGMA integrity_check")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.map(|r| r.map_err(anyhow::Error::from)).collect()
+        let mut results: Vec<String> = rows
+            .map(|r| r.map_err(anyhow::Error::from))
+            .collect::<Result<_>>()?;
+
+        let foreign_key_issue: Option<String> = self
+            .conn
+            .query_row("PRAGMA foreign_key_check", [], |row| {
+                Ok(format!(
+                    "{} row {} references {}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?
+                ))
+            })
+            .optional()?;
+        if let Some(issue) = foreign_key_issue {
+            results.push(issue);
+        }
+        Ok(results)
     }
 
     pub fn stats(&self) -> Result<DbStats> {
@@ -450,38 +608,26 @@ impl Database {
     }
 }
 
+pub fn restore_database(src: &std::path::Path) -> Result<()> {
+    let dest = db_path();
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(src, &dest)
+        .with_context(|| format!("Failed to restore database from {}", src.display()))?;
+    Ok(())
+}
+
 pub fn migrate_from_toml(db: &Database) -> Result<MigrationReport> {
-    let cfg = crate::utils::config::load()?;
+    let mut cfg = crate::utils::config::parse_config_file()?;
+    cfg = crate::utils::config::migrate_config(cfg)?;
+    crate::utils::config::ensure_default_networks(&mut cfg);
+    db.save_config(&cfg)?;
     let mut report = MigrationReport::default();
 
-    for wallet in &cfg.wallets {
-        db.insert_wallet(&WalletRow {
-            name: wallet.name.clone(),
-            public_key: wallet.public_key.clone(),
-            network: wallet.network.clone(),
-            created_at: wallet.created_at.clone(),
-            funded: wallet.funded,
-        })?;
-        report.wallets_migrated += 1;
-    }
-
-    for (name, net) in &cfg.networks {
-        db.insert_network(&NetworkRow {
-            name: name.clone(),
-            horizon_url: net.horizon_url.clone(),
-            soroban_rpc_url: net.soroban_rpc_url.clone(),
-            friendbot_url: net.friendbot_url.clone(),
-            passphrase: net.passphrase.clone(),
-        })?;
-        report.networks_migrated += 1;
-    }
-
-    db.insert_config_kv("network", &cfg.network)?;
-    if let Some(telemetry) = cfg.telemetry_enabled {
-        db.insert_config_kv("telemetry_enabled", &telemetry.to_string())?;
-    }
-    db.insert_config_kv("schema_version", &cfg.version)?;
-    report.config_keys_migrated += 3;
+    report.wallets_migrated = cfg.wallets.len();
+    report.networks_migrated = cfg.networks.len();
+    report.config_keys_migrated = db.list_config_kv()?.len();
 
     db.set_meta("migrated_from_toml", "true")?;
     db.set_meta("migration_timestamp", &chrono::Utc::now().to_rfc3339())?;
@@ -490,80 +636,7 @@ pub fn migrate_from_toml(db: &Database) -> Result<MigrationReport> {
 }
 
 pub fn export_to_toml(db: &Database) -> Result<String> {
-    use std::collections::HashMap;
-
-    let wallets = db.list_wallets()?;
-    let networks = db.list_networks()?;
-    let kv = db.list_config_kv()?;
-
-    let active_network = kv
-        .iter()
-        .find(|(k, _)| k == "network")
-        .map(|(_, v)| v.clone())
-        .unwrap_or_else(|| "testnet".to_string());
-
-    let telemetry = kv
-        .iter()
-        .find(|(k, _)| k == "telemetry_enabled")
-        .and_then(|(_, v)| v.parse::<bool>().ok());
-
-    let mut cfg_map: HashMap<String, toml::Value> = HashMap::new();
-    cfg_map.insert("version".to_string(), toml::Value::String("1".to_string()));
-    cfg_map.insert("network".to_string(), toml::Value::String(active_network));
-
-    if let Some(t) = telemetry {
-        cfg_map.insert("telemetry_enabled".to_string(), toml::Value::Boolean(t));
-    }
-
-    let wallet_array: Vec<toml::Value> = wallets
-        .iter()
-        .map(|w| {
-            let mut m = toml::map::Map::new();
-            m.insert("name".to_string(), toml::Value::String(w.name.clone()));
-            m.insert(
-                "public_key".to_string(),
-                toml::Value::String(w.public_key.clone()),
-            );
-            m.insert(
-                "network".to_string(),
-                toml::Value::String(w.network.clone()),
-            );
-            m.insert(
-                "created_at".to_string(),
-                toml::Value::String(w.created_at.clone()),
-            );
-            m.insert("funded".to_string(), toml::Value::Boolean(w.funded));
-            toml::Value::Table(m)
-        })
-        .collect();
-    cfg_map.insert("wallets".to_string(), toml::Value::Array(wallet_array));
-
-    let mut net_table = toml::map::Map::new();
-    for net in &networks {
-        let mut nm = toml::map::Map::new();
-        nm.insert(
-            "horizon_url".to_string(),
-            toml::Value::String(net.horizon_url.clone()),
-        );
-        if let Some(rpc) = &net.soroban_rpc_url {
-            nm.insert(
-                "soroban_rpc_url".to_string(),
-                toml::Value::String(rpc.clone()),
-            );
-        }
-        if let Some(fb) = &net.friendbot_url {
-            nm.insert("friendbot_url".to_string(), toml::Value::String(fb.clone()));
-        }
-        if let Some(pp) = &net.passphrase {
-            nm.insert("passphrase".to_string(), toml::Value::String(pp.clone()));
-        }
-        net_table.insert(net.name.clone(), toml::Value::Table(nm));
-    }
-    cfg_map.insert("networks".to_string(), toml::Value::Table(net_table));
-
-    Ok(toml::to_string_pretty(&toml::Value::Table(
-        cfg_map.into_iter().collect(),
-    ))?)
+    Ok(toml::to_string_pretty(&db.load_config()?)?)
 }
 
 const SCHEMA: &str = "
@@ -575,9 +648,11 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS wallets (
     name        TEXT PRIMARY KEY,
     public_key  TEXT NOT NULL,
+    secret_key  TEXT,
     network     TEXT NOT NULL DEFAULT 'testnet',
     created_at  TEXT NOT NULL,
-    funded      INTEGER NOT NULL DEFAULT 0
+    funded      INTEGER NOT NULL DEFAULT 0,
+    rotation_history TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS networks (
@@ -627,16 +702,22 @@ CREATE INDEX IF NOT EXISTS idx_events_network ON events(network);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_contract_ledger ON events(contract_id, ledger);
 CREATE INDEX IF NOT EXISTS idx_wallets_network ON wallets(network);
+CREATE INDEX IF NOT EXISTS idx_wallets_public_key ON wallets(public_key);
 CREATE INDEX IF NOT EXISTS idx_config_kv_key   ON config_kv(key);
+CREATE INDEX IF NOT EXISTS idx_plugins_source ON plugins(source);
+CREATE INDEX IF NOT EXISTS idx_templates_source_url ON templates(source_url);
+CREATE INDEX IF NOT EXISTS idx_templates_cached_at ON templates(cached_at);
 ";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletRow {
     pub name: String,
     pub public_key: String,
+    pub secret_key: Option<String>,
     pub network: String,
     pub created_at: String,
     pub funded: bool,
+    pub rotation_history: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -733,9 +814,11 @@ mod tests {
         db.insert_wallet(&WalletRow {
             name: "alice".to_string(),
             public_key: "GABC".to_string(),
+            secret_key: Some("SABC".to_string()),
             network: "testnet".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             funded: false,
+            rotation_history: "[]".to_string(),
         })
         .unwrap();
         let wallets = db.list_wallets().unwrap();
@@ -771,9 +854,11 @@ mod tests {
         db.insert_wallet(&WalletRow {
             name: "bob".to_string(),
             public_key: "GXYZ".to_string(),
+            secret_key: None,
             network: "testnet".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             funded: true,
+            rotation_history: "[]".to_string(),
         })
         .unwrap();
         let stats = db.stats().unwrap();
@@ -786,9 +871,11 @@ mod tests {
         db.insert_wallet(&WalletRow {
             name: "temp".to_string(),
             public_key: "GTEMP".to_string(),
+            secret_key: None,
             network: "testnet".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             funded: false,
+            rotation_history: "[]".to_string(),
         })
         .unwrap();
         let removed = db.delete_wallet("temp").unwrap();

@@ -1,6 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 
 use crate::utils::crypto;
+use crate::utils::database;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
@@ -560,35 +561,32 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn load() -> Result<Config> {
-    let path = config_path();
-    if !path.exists() {
-        return Ok(Config::default());
-    }
-    let contents = fs::read_to_string(&path).with_context(|| {
-        format!(
-            "Failed to read config file at '{}'.\n\
-             Check that the file exists and is readable.",
-            path.display()
-        )
-    })?;
-    let mut config: Config = toml::from_str(&contents).with_context(|| {
-        format!(
-            "Failed to parse config file at '{}'.\n\
-             The file may be corrupted or contain invalid TOML.\n\
-             Run `starforge config doctor` to diagnose, or delete the file to reset to defaults.",
-            path.display()
-        )
-    })?;
+    let db = database::Database::open()?;
+    db.initialize()?;
 
-    // Migrate config if needed
+    let mut config = if db.has_config()? {
+        db.load_config()?
+    } else {
+        let path = config_path();
+        let cfg = if path.exists() {
+            let mut toml_cfg = parse_config_file()?;
+            toml_cfg = migrate_config(toml_cfg)?;
+            toml_cfg
+        } else {
+            Config::default()
+        };
+        db.save_config(&cfg)?;
+        cfg
+    };
+
     config = migrate_config(config)?;
 
-    // Guarantee built-in networks are always present
     ensure_default_networks(&mut config);
 
-    // Save migrated config
     if config.version != CURRENT_CONFIG_VERSION {
         save(&config)?;
+    } else {
+        db.save_config(&config)?;
     }
 
     Ok(config)
@@ -1064,13 +1062,9 @@ pub fn ensure_default_networks(cfg: &mut Config) {
 }
 
 pub fn save(config: &Config) -> Result<()> {
-    let dir = config_dir();
-    if !dir.exists() {
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("Failed to create config dir {:?}", dir))?;
-    }
-    let contents = toml::to_string_pretty(config).with_context(|| "Failed to serialize config")?;
-    fs::write(config_path(), contents).with_context(|| "Failed to write config file")?;
+    validate_config(config)?;
+    let db = database::Database::open()?;
+    db.save_config(config)?;
     Ok(())
 }
 
