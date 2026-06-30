@@ -1,46 +1,85 @@
 use anyhow::{Context, Result};
 use std::io::Cursor;
 use std::path::Path;
-use stellar_xdr::curr::{Limited, Limits, ReadXdr, ScSpecEntry, ScSpecFunctionV0, ScSpecTypeDef};
+use stellar_xdr::curr::{
+    Limited, Limits, ReadXdr, ScSpecEntry, ScSpecFunctionV0, ScSpecTypeDef, ScSpecUdtEnumV0,
+    ScSpecUdtStructV0, ScSpecUdtUnionV0,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingLanguage {
     Rust,
     TypeScript,
+    Python,
+    Go,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ContractFunction {
-    name: String,
-    inputs: Vec<ContractInput>,
-    output: Option<String>,
+pub struct ContractMetadata {
+    pub functions: Vec<ContractFunction>,
+    pub structs: Vec<ContractStruct>,
+    pub enums: Vec<ContractEnum>,
+    pub events: Vec<ContractEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ContractInput {
-    name: String,
-    type_name: String,
+pub struct ContractFunction {
+    pub name: String,
+    pub inputs: Vec<ContractInput>,
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractInput {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractStruct {
+    pub name: String,
+    pub fields: Vec<ContractField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractField {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractEnum {
+    pub name: String,
+    pub variants: Vec<ContractVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractVariant {
+    pub name: String,
+    pub type_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractEvent {
+    pub name: String,
+    pub fields: Vec<ContractField>,
 }
 
 pub fn generate_bindings(wasm_path: &Path, language: BindingLanguage) -> Result<String> {
     let wasm = std::fs::read(wasm_path)
         .with_context(|| format!("Failed to read WASM file {}", wasm_path.display()))?;
     let entries = read_spec_entries(&wasm)?;
-    let functions = entries
-        .iter()
-        .filter_map(|entry| match entry {
-            ScSpecEntry::FunctionV0(function) => Some(contract_function(function)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let metadata = parse_spec_entries(&entries);
 
-    if functions.is_empty() {
+    if metadata.functions.is_empty() {
         anyhow::bail!("No contract functions found in WASM metadata");
     }
 
     match language {
-        BindingLanguage::Rust => Ok(generate_rust(&functions)),
-        BindingLanguage::TypeScript => Ok(generate_typescript(&functions)),
+        BindingLanguage::Rust => Ok(generate_rust(&metadata)),
+        BindingLanguage::TypeScript => Ok(generate_typescript(&metadata)),
+        BindingLanguage::Python => Ok(generate_python(&metadata)),
+        BindingLanguage::Go => Ok(generate_go(&metadata)),
     }
 }
 
@@ -57,6 +96,126 @@ fn read_spec_entries(wasm: &[u8]) -> Result<Vec<ScSpecEntry>> {
     .collect::<std::result::Result<Vec<_>, _>>()
     .context("Failed to decode contractspecv0 XDR metadata")?;
     Ok(entries)
+}
+
+fn parse_spec_entries(entries: &[ScSpecEntry]) -> ContractMetadata {
+    let mut functions = Vec::new();
+    let mut structs = Vec::new();
+    let mut enums = Vec::new();
+    let mut events = Vec::new();
+
+    for entry in entries {
+        match entry {
+            ScSpecEntry::FunctionV0(function) => {
+                functions.push(contract_function(function));
+            }
+            ScSpecEntry::UdtStructV0(udt) => {
+                structs.push(contract_struct(udt));
+            }
+            ScSpecEntry::UdtEnumV0(udt) => {
+                enums.push(contract_enum(udt));
+            }
+            ScSpecEntry::UdtUnionV0(_) => {}
+            ScSpecEntry::UdtErrorEnumV0(_) => {}
+            _ => {}
+        }
+    }
+
+    ContractMetadata {
+        functions,
+        structs,
+        enums,
+        events,
+    }
+}
+
+fn contract_function(function: &ScSpecFunctionV0) -> ContractFunction {
+    ContractFunction {
+        name: function.name.to_string(),
+        inputs: function
+            .inputs
+            .iter()
+            .map(|input| ContractInput {
+                name: input.name.to_string(),
+                type_name: spec_type_name(&input.type_),
+            })
+            .collect(),
+        output: function.outputs.first().map(spec_type_name),
+    }
+}
+
+fn contract_struct(udt: &ScSpecUdtStructV0) -> ContractStruct {
+    ContractStruct {
+        name: udt.name.to_string(),
+        fields: udt
+            .fields
+            .iter()
+            .map(|field| ContractField {
+                name: field.name.to_string(),
+                type_name: spec_type_name(&field.type_),
+            })
+            .collect(),
+    }
+}
+
+fn contract_enum(udt: &ScSpecUdtEnumV0) -> ContractEnum {
+    ContractEnum {
+        name: udt.name.to_string(),
+        variants: udt
+            .cases
+            .iter()
+            .map(|case| ContractVariant {
+                name: case.name.to_string(),
+                type_name: case.type_.as_ref().map(spec_type_name),
+            })
+            .collect(),
+    }
+}
+
+fn spec_type_name(type_def: &ScSpecTypeDef) -> String {
+    match type_def {
+        ScSpecTypeDef::Val => "Val".to_string(),
+        ScSpecTypeDef::Bool => "bool".to_string(),
+        ScSpecTypeDef::Void => "()".to_string(),
+        ScSpecTypeDef::Error => "Error".to_string(),
+        ScSpecTypeDef::U32 => "u32".to_string(),
+        ScSpecTypeDef::I32 => "i32".to_string(),
+        ScSpecTypeDef::U64 => "u64".to_string(),
+        ScSpecTypeDef::I64 => "i64".to_string(),
+        ScSpecTypeDef::Timepoint => "u64".to_string(),
+        ScSpecTypeDef::Duration => "u64".to_string(),
+        ScSpecTypeDef::U128 => "u128".to_string(),
+        ScSpecTypeDef::I128 => "i128".to_string(),
+        ScSpecTypeDef::U256 => "U256".to_string(),
+        ScSpecTypeDef::I256 => "I256".to_string(),
+        ScSpecTypeDef::Bytes => "Bytes".to_string(),
+        ScSpecTypeDef::String => "String".to_string(),
+        ScSpecTypeDef::Symbol => "Symbol".to_string(),
+        ScSpecTypeDef::Address => "Address".to_string(),
+        ScSpecTypeDef::Option(inner) => format!("Option<{}>", spec_type_name(&inner.value_type)),
+        ScSpecTypeDef::Result(inner) => format!(
+            "Result<{}, {}>",
+            spec_type_name(&inner.ok_type),
+            spec_type_name(&inner.error_type)
+        ),
+        ScSpecTypeDef::Vec(inner) => format!("Vec<{}>", spec_type_name(&inner.element_type)),
+        ScSpecTypeDef::Map(inner) => format!(
+            "Map<{}, {}>",
+            spec_type_name(&inner.key_type),
+            spec_type_name(&inner.value_type)
+        ),
+        ScSpecTypeDef::Tuple(inner) => {
+            let types = inner
+                .value_types
+                .iter()
+                .map(spec_type_name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({})", types)
+        }
+        ScSpecTypeDef::BytesN(inner) => format!("BytesN<{}>", inner.n),
+        ScSpecTypeDef::Udt(inner) => inner.name.to_string(),
+    }
 }
 
 fn contract_spec_section(wasm: &[u8]) -> Result<&[u8]> {
@@ -116,68 +275,7 @@ fn read_var_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
     }
 }
 
-fn contract_function(function: &ScSpecFunctionV0) -> ContractFunction {
-    ContractFunction {
-        name: function.name.to_string(),
-        inputs: function
-            .inputs
-            .iter()
-            .map(|input| ContractInput {
-                name: input.name.to_string(),
-                type_name: spec_type_name(&input.type_),
-            })
-            .collect(),
-        output: function.outputs.first().map(spec_type_name),
-    }
-}
-
-fn spec_type_name(type_def: &ScSpecTypeDef) -> String {
-    match type_def {
-        ScSpecTypeDef::Val => "Val".to_string(),
-        ScSpecTypeDef::Bool => "bool".to_string(),
-        ScSpecTypeDef::Void => "()".to_string(),
-        ScSpecTypeDef::Error => "Error".to_string(),
-        ScSpecTypeDef::U32 => "u32".to_string(),
-        ScSpecTypeDef::I32 => "i32".to_string(),
-        ScSpecTypeDef::U64 => "u64".to_string(),
-        ScSpecTypeDef::I64 => "i64".to_string(),
-        ScSpecTypeDef::Timepoint => "u64".to_string(),
-        ScSpecTypeDef::Duration => "u64".to_string(),
-        ScSpecTypeDef::U128 => "u128".to_string(),
-        ScSpecTypeDef::I128 => "i128".to_string(),
-        ScSpecTypeDef::U256 => "U256".to_string(),
-        ScSpecTypeDef::I256 => "I256".to_string(),
-        ScSpecTypeDef::Bytes => "Bytes".to_string(),
-        ScSpecTypeDef::String => "String".to_string(),
-        ScSpecTypeDef::Symbol => "Symbol".to_string(),
-        ScSpecTypeDef::Address => "Address".to_string(),
-        ScSpecTypeDef::Option(inner) => format!("Option<{}>", spec_type_name(&inner.value_type)),
-        ScSpecTypeDef::Result(inner) => format!(
-            "Result<{}, {}>",
-            spec_type_name(&inner.ok_type),
-            spec_type_name(&inner.error_type)
-        ),
-        ScSpecTypeDef::Vec(inner) => format!("Vec<{}>", spec_type_name(&inner.element_type)),
-        ScSpecTypeDef::Map(inner) => format!(
-            "Map<{}, {}>",
-            spec_type_name(&inner.key_type),
-            spec_type_name(&inner.value_type)
-        ),
-        ScSpecTypeDef::Tuple(inner) => {
-            let types = inner
-                .value_types
-                .iter()
-                .map(spec_type_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({})", types)
-        }
-        ScSpecTypeDef::BytesN(inner) => format!("BytesN<{}>", inner.n),
-        ScSpecTypeDef::Udt(inner) => inner.name.to_string(),
-    }
-}
-
-fn generate_rust(functions: &[ContractFunction]) -> String {
+fn generate_rust(metadata: &ContractMetadata) -> String {
     let mut out = String::from(
         "use std::process::Command;\n\n\
          pub struct ContractClient {\n\
@@ -195,7 +293,7 @@ fn generate_rust(functions: &[ContractFunction]) -> String {
          \t}\n\n",
     );
 
-    for function in functions {
+    for function in &metadata.functions {
         let rust_name = sanitize_ident(&function.name);
         let params = function
             .inputs
@@ -228,11 +326,37 @@ fn generate_rust(functions: &[ContractFunction]) -> String {
         );
     }
 
-    out.push_str("}\n");
+    out.push_str("}\n\n");
+
+    for struct_def in &metadata.structs {
+        let struct_name = pascal_case(&struct_def.name);
+        out.push_str(&format!("pub struct {} {{\n", struct_name));
+        for field in &struct_def.fields {
+            let field_name = sanitize_ident(&field.name);
+            let rust_ty = rust_type(&field.type_name);
+            out.push_str(&format!("\tpub {}: {},\n", field_name, rust_ty));
+        }
+        out.push_str("}\n\n");
+    }
+
+    for enum_def in &metadata.enums {
+        let enum_name = pascal_case(&enum_def.name);
+        out.push_str(&format!("pub enum {} {{\n", enum_name));
+        for variant in &enum_def.variants {
+            let variant_name = pascal_case(&variant.name);
+            if let Some(ty) = &variant.type_name {
+                out.push_str(&format!("\t{}({}),\n", variant_name, rust_type(ty)));
+            } else {
+                out.push_str(&format!("\t{},\n", variant_name));
+            }
+        }
+        out.push_str("}\n\n");
+    }
+
     out
 }
 
-fn generate_typescript(functions: &[ContractFunction]) -> String {
+fn generate_typescript(metadata: &ContractMetadata) -> String {
     let mut out = String::from(
         "export type ContractClientOptions = {\n\
          \tcontractId: string;\n\
@@ -249,7 +373,7 @@ fn generate_typescript(functions: &[ContractFunction]) -> String {
          \t}\n\n",
     );
 
-    for function in functions {
+    for function in &metadata.functions {
         let ts_name = sanitize_ident(&function.name);
         let params = function
             .inputs
@@ -286,8 +410,221 @@ fn generate_typescript(functions: &[ContractFunction]) -> String {
         out.push_str("]);\n\t}\n\n");
     }
 
-    out.push_str("}\n");
+    out.push_str("}\n\n");
+
+    for struct_def in &metadata.structs {
+        let struct_name = pascal_case(&struct_def.name);
+        out.push_str(&format!("export interface {} {{\n", struct_name));
+        for field in &struct_def.fields {
+            let field_name = camel_case(&field.name);
+            let ts_ty = ts_type(&field.type_name);
+            out.push_str(&format!("\t{}: {};\n", field_name, ts_ty));
+        }
+        out.push_str("}\n\n");
+    }
+
+    for enum_def in &metadata.enums {
+        let enum_name = pascal_case(&enum_def.name);
+        out.push_str(&format!("export type {} = \n", enum_name));
+        for (i, variant) in enum_def.variants.iter().enumerate() {
+            let variant_name = camel_case(&variant.name);
+            let variant_type = if let Some(ty) = &variant.type_name {
+                format!("{{ type: \"{}\"; value: {} }}", variant_name, ts_type(ty))
+            } else {
+                format!("{{ type: \"{}\" }}", variant_name)
+            };
+            if i == enum_def.variants.len() - 1 {
+                out.push_str(&format!("\t{};\n", variant_type));
+            } else {
+                out.push_str(&format!("\t{} |\n", variant_type));
+            }
+        }
+        out.push_str("\n");
+    }
+
     out
+}
+
+fn generate_python(metadata: &ContractMetadata) -> String {
+    let mut out = String::from(
+        "from dataclasses import dataclass\n\
+         from typing import List, Dict, Optional, Union, Tuple\n\
+         import subprocess\n\n\
+         @dataclass\n\
+         class ContractClientOptions:\n\
+             contract_id: str\n\
+             network: str = \"testnet\"\n\
+             wallet: Optional[str] = None\n\n\
+         class ContractClient:\n\
+             def __init__(self, options: ContractClientOptions):\n\
+                 self.options = options\n\n\
+             def _invoke_args(self, function_name: str, args: List[Tuple[str, str]]) -> List[str]:\n\
+                 cli = [\"starforge\", \"contract\", \"invoke\", self.options.contract_id, function_name, \"--network\", self.options.network]\n\
+                 for value, type_name in args:\n\
+                     cli.extend([\"--arg\", str(value), \"--type\", type_name])\n\
+                 if self.options.wallet:\n\
+                     cli.extend([\"--wallet\", self.options.wallet, \"--submit\"])\n\
+                 return cli\n\n",
+    );
+
+    for function in &metadata.functions {
+        let py_name = sanitize_ident(&function.name);
+        let params = function
+            .inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "{}: {}",
+                    sanitize_ident(&input.name),
+                    python_type(&input.type_name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_type = function
+            .output
+            .as_deref()
+            .map(python_type)
+            .unwrap_or("None")
+            .to_string();
+        out.push_str(&format!(
+            "    def {}(self, {}) -> List[str]:\n\
+             \"\"\"Returns CLI args; expected result type: {}\"\"\"\n\
+             args = [\n",
+            py_name, params, return_type
+        ));
+        for (i, input) in function.inputs.iter().enumerate() {
+            if i == function.inputs.len() - 1 {
+                out.push_str(&format!(
+                    "                ({}, \"{}\")\n",
+                    sanitize_ident(&input.name),
+                    input.type_name
+                ));
+            } else {
+                out.push_str(&format!(
+                    "                ({}, \"{}\"),\n",
+                    sanitize_ident(&input.name),
+                    input.type_name
+                ));
+            }
+        }
+        out.push_str(&format!(
+            "            ]\n\
+             return self._invoke_args(\"{}\", args)\n\n",
+            function.name
+        ));
+    }
+
+    out.push_str("\n");
+
+    for struct_def in &metadata.structs {
+        let struct_name = pascal_case(&struct_def.name);
+        out.push_str(&format!("@dataclass\nclass {}:\n", struct_name));
+        for field in &struct_def.fields {
+            let field_name = snake_case(&field.name);
+            let py_ty = python_type(&field.type_name);
+            out.push_str(&format!("    {}: {}\n", field_name, py_ty));
+        }
+        out.push_str("\n");
+    }
+
+    out
+}
+
+fn generate_go(metadata: &ContractMetadata) -> String {
+    let mut out = String::from(
+        "package client\n\n\
+         import \"os/exec\"\n\n\
+         type ContractClientOptions struct {\n\
+         \tContractID string\n\
+         \tNetwork    string\n\
+         \tWallet     *string\n\
+         }\n\n\
+         type ContractClient struct {\n\
+         \toptions ContractClientOptions\n\
+         }\n\n\
+         func NewContractClient(options ContractClientOptions) *ContractClient {\n\
+         \tif options.Network == \"\" {\n\
+         \t\toptions.Network = \"testnet\"\n\
+         \t}\n\
+         \treturn &ContractClient{options: options}\n\
+         }\n\n\
+         func (c *ContractClient) invokeArgs(functionName string, args [][2]string) []string {\n\
+         \tcli := []string{\"contract\", \"invoke\", c.options.ContractID, functionName, \"--network\", c.options.Network}\n\
+         \tfor _, arg := range args {\n\
+         \t\tcli = append(cli, \"--arg\", arg[0], \"--type\", arg[1])\n\
+         \t}\n\
+         \tif c.options.Wallet != nil {\n\
+         \t\tcli = append(cli, \"--wallet\", *c.options.Wallet, \"--submit\")\n\
+         \t}\n\
+         \treturn cli\n\
+         }\n\n",
+    );
+
+    for function in &metadata.functions {
+        let go_name = pascal_case(&function.name);
+        let params = function
+            .inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "{} {}",
+                    pascal_case(&input.name),
+                    go_type(&input.type_name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "func (c *ContractClient) {}({}) []string {{\n\
+             \targs := [][2]string{{\n",
+            go_name, params
+        ));
+        for input in &function.inputs {
+            out.push_str(&format!(
+                "\t\t{{\"{}\", \"{}\"}},\n",
+                pascal_case(&input.name),
+                input.type_name
+            ));
+        }
+        out.push_str(&format!(
+            "\t}}\n\
+             \treturn c.invokeArgs(\"{}\", args)\n\
+             }}\n\n",
+            function.name
+        ));
+    }
+
+    for struct_def in &metadata.structs {
+        let struct_name = pascal_case(&struct_def.name);
+        out.push_str(&format!("type {} struct {{\n", struct_name));
+        for field in &struct_def.fields {
+            let field_name = pascal_case(&field.name);
+            let go_ty = go_type(&field.type_name);
+            out.push_str(&format!("\t{} {}\n", field_name, go_ty));
+        }
+        out.push_str("}\n\n");
+    }
+
+    out
+}
+
+fn rust_type(type_name: &str) -> &'static str {
+    match type_name {
+        "bool" => "bool",
+        "u32" => "u32",
+        "i32" => "i32",
+        "u64" => "u64",
+        "i64" => "i64",
+        "u128" => "u128",
+        "i128" => "i128",
+        "String" => "String",
+        "Symbol" => "String",
+        "Address" => "String",
+        "Bytes" => "Vec<u8>",
+        "()" => "()",
+        _ => "String",
+    }
 }
 
 fn ts_type(type_name: &str) -> &'static str {
@@ -295,8 +632,36 @@ fn ts_type(type_name: &str) -> &'static str {
         "bool" => "boolean",
         "u32" | "i32" | "u64" | "i64" | "u128" | "i128" => "number | bigint",
         "String" | "Symbol" | "Address" => "string",
+        "Bytes" => "Uint8Array",
         "()" => "void",
         _ => "unknown",
+    }
+}
+
+fn python_type(type_name: &str) -> &'static str {
+    match type_name {
+        "bool" => "bool",
+        "u32" | "i32" | "u64" | "i64" | "u128" | "i128" => "int",
+        "String" | "Symbol" | "Address" => "str",
+        "Bytes" => "bytes",
+        "()" => "None",
+        _ => "str",
+    }
+}
+
+fn go_type(type_name: &str) -> &'static str {
+    match type_name {
+        "bool" => "bool",
+        "u32" => "uint32",
+        "i32" => "int32",
+        "u64" => "uint64",
+        "i64" => "int64",
+        "u128" => "string",
+        "i128" => "string",
+        "String" | "Symbol" | "Address" => "string",
+        "Bytes" => "[]byte",
+        "()" => "",
+        _ => "string",
     }
 }
 
@@ -317,6 +682,49 @@ fn sanitize_ident(input: &str) -> String {
     } else {
         out
     }
+}
+
+fn snake_case(input: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in input.chars().enumerate() {
+        if i > 0 && ch.is_ascii_uppercase() {
+            out.push('_');
+        }
+        out.push(ch.to_ascii_lowercase());
+    }
+    sanitize_ident(&out)
+}
+
+fn camel_case(input: &str) -> String {
+    let mut out = String::new();
+    let mut next_upper = false;
+    for (i, ch) in input.chars().enumerate() {
+        if ch == '_' {
+            next_upper = true;
+        } else if next_upper || (i == 0 && ch.is_ascii_lowercase()) {
+            out.push(ch.to_ascii_uppercase());
+            next_upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    sanitize_ident(&out)
+}
+
+fn pascal_case(input: &str) -> String {
+    let mut out = String::new();
+    let mut next_upper = true;
+    for ch in input.chars() {
+        if ch == '_' {
+            next_upper = true;
+        } else if next_upper {
+            out.push(ch.to_ascii_uppercase());
+            next_upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    sanitize_ident(&out)
 }
 
 #[cfg(test)]

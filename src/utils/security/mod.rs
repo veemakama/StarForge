@@ -12,7 +12,10 @@ pub mod threat_intel;
 pub mod validation;
 
 pub use anomaly::{AnomalyDetector, AnomalyFinding};
-pub use audit::{format_report, run_audit, AuditConfig, AuditResult, VulnerabilityFinding};
+pub use audit::{
+    format_html_report, format_report, generate_github_actions_workflow, run_audit, AuditConfig,
+    AuditResult, AuditToolStatus, VulnerabilityFinding,
+};
 pub use checklist::{run_checklist, ChecklistItem, ChecklistResult};
 pub use event_rules::{default_rules, evaluate_event, SecurityEvent, SecurityEventRule};
 pub use hardening::{apply_hardening, HardeningOptions, HardeningResult};

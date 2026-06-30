@@ -1,7 +1,8 @@
-use crate::utils::{bindings, call_graph, config, crypto, print as p, soroban};
+use crate::utils::{bindings, call_graph, config, print as p, soroban, wallet_signer};
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
+use crate::utils::hardware_wallet::HardwareWalletKind;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -18,6 +19,61 @@ pub enum ContractCommands {
     GenerateBindings(GenerateBindingsArgs),
     /// Visualize cross-contract call graph from Soroban source
     CallGraph(CallGraphArgs),
+    /// Manage contract dependencies
+    Deps(DepsArgs),
+}
+
+#[derive(Args)]
+pub struct DepsArgs {
+    #[command(subcommand)]
+    pub cmd: DepsCommands,
+}
+
+#[derive(Subcommand)]
+pub enum DepsCommands {
+    /// Initialize contract-dependencies.toml
+    Init,
+    /// Add a contract dependency
+    Add(DepsAddArgs),
+    /// Update a contract dependency
+    Update(DepsUpdateArgs),
+    /// Resolve and show deployment order
+    Resolve,
+    /// Visualize the dependency graph
+    Graph(DepsGraphArgs),
+}
+
+#[derive(Args)]
+pub struct DepsAddArgs {
+    /// Name of the dependency
+    pub name: String,
+    /// Version constraint
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Local path
+    #[arg(long)]
+    pub path: Option<String>,
+    /// Git repository URL
+    #[arg(long)]
+    pub git: Option<String>,
+    /// Git branch
+    #[arg(long)]
+    pub branch: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DepsUpdateArgs {
+    /// Name of the dependency to update
+    pub name: String,
+    /// New version constraint
+    pub version: String,
+}
+
+#[derive(Args)]
+pub struct DepsGraphArgs {
+    /// Format: ascii or dot
+    #[arg(long, default_value = "ascii")]
+    pub format: String,
 }
 
 #[derive(Args)]
@@ -33,6 +89,18 @@ pub struct CallGraphArgs {
     /// Show pattern analysis warnings
     #[arg(long, default_value = "true")]
     pub patterns: bool,
+    /// Show concrete structural / gas optimization suggestions
+    #[arg(long, default_value = "false")]
+    pub optimize: bool,
+    /// Launch the interactive call explorere (stdin menu) after extraction
+    #[arg(long, default_value = "false", conflicts_with = "out")]
+    pub explore: bool,
+    /// Filter displayed patterns by minimum severity (low|medium|high)
+    #[arg(long, value_parser = ["low", "medium", "high"])]
+    pub severity: Option<String>,
+    /// Show a one-shot statistics summary at the end
+    #[arg(long, default_value = "false")]
+    pub stats: bool,
 }
 
 #[derive(Args)]
@@ -56,6 +124,12 @@ pub struct InvokeArgs {
     /// Submit the transaction after simulation
     #[arg(long, default_value = "false")]
     pub submit: bool,
+    /// Sign with a hardware wallet instead of a local secret key
+    #[arg(long, value_enum)]
+    pub hardware: Option<HardwareWalletKind>,
+    /// HD derivation path for hardware wallet signing
+    #[arg(long, default_value = crate::utils::hardware_wallet::STELLAR_HD_PATH)]
+    pub hd_path: String,
 }
 
 #[derive(Args)]
@@ -81,12 +155,20 @@ pub struct UploadArgs {
     /// Wallet name to use for signing
     #[arg(long)]
     pub wallet: Option<String>,
+    /// Sign with a hardware wallet instead of a local secret key
+    #[arg(long, value_enum)]
+    pub hardware: Option<HardwareWalletKind>,
+    /// HD derivation path for hardware wallet signing
+    #[arg(long, default_value = crate::utils::hardware_wallet::STELLAR_HD_PATH)]
+    pub hd_path: String,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum BindingLang {
     Rust,
     Ts,
+    Python,
+    Go,
 }
 
 #[derive(Args)]
@@ -105,6 +187,7 @@ pub async fn handle(cmd: ContractCommands) -> Result<()> {
         ContractCommands::Upload(args) => handle_upload(args),
         ContractCommands::GenerateBindings(args) => handle_generate_bindings(args),
         ContractCommands::CallGraph(args) => handle_call_graph(args),
+        ContractCommands::Deps(args) => handle_deps(args),
     }
 }
 
@@ -114,6 +197,8 @@ fn handle_generate_bindings(args: GenerateBindingsArgs) -> Result<()> {
     let lang = match args.lang {
         BindingLang::Rust => bindings::BindingLanguage::Rust,
         BindingLang::Ts => bindings::BindingLanguage::TypeScript,
+        BindingLang::Python => bindings::BindingLanguage::Python,
+        BindingLang::Go => bindings::BindingLanguage::Go,
     };
     let generated = bindings::generate_bindings(&args.wasm_file, lang)?;
     println!("{}", generated);
@@ -234,10 +319,10 @@ async fn handle_invoke(args: InvokeArgs) -> Result<()> {
         p::warn("You are invoking on MAINNET. This may cost real XLM if submitted.");
     }
 
-    // Load and optionally decrypt wallet for submission
-    let submit_wallet: Option<crate::utils::config::WalletEntry> = if args.submit {
+    // Load wallet and signing configuration for submission
+    let (submit_wallet, signing_request) = if args.submit {
         let cfg = config::load()?;
-        let mut w = if let Some(ref wallet_name) = args.wallet {
+        let wallet = if let Some(ref wallet_name) = args.wallet {
             cfg.wallets
                 .iter()
                 .find(|w| &w.name == wallet_name)
@@ -247,31 +332,35 @@ async fn handle_invoke(args: InvokeArgs) -> Result<()> {
                         wallet_name
                     )
                 })?
-                .clone()
         } else if !cfg.wallets.is_empty() {
             p::info(&format!(
                 "No --wallet specified. Using: {}",
                 cfg.wallets[0].name.cyan()
             ));
-            cfg.wallets[0].clone()
+            &cfg.wallets[0]
         } else {
             anyhow::bail!(
                 "No wallets found for submission. Create one first:\n  starforge wallet create deployer --fund"
             );
         };
-        p::kv("Wallet", &w.name);
-        if let Some(sk) = &w.secret_key.clone() {
-            if sk.contains(':') {
-                let pwd = crypto::prompt_password(
-                    &format!("Enter password to decrypt wallet '{}'", w.name),
-                    false,
-                )?;
-                w.secret_key = Some(crypto::decrypt_secret(&pwd, sk)?);
-            }
+        p::kv("Wallet", &wallet.name);
+        if wallet.secret_key.is_none() && args.hardware.is_none() {
+            anyhow::bail!(
+                "Wallet '{}' has no local secret key. Use --hardware ledger or --hardware trezor.",
+                wallet.name
+            );
         }
-        Some(w)
+        let signing = wallet_signer::SigningRequest::from_options(
+            Some(wallet),
+            args.hardware,
+            Some(&args.hd_path),
+            &args.network,
+            false,
+            "contract invocation",
+        )?;
+        (Some(wallet.clone()), Some(signing))
     } else {
-        None
+        (None, None)
     };
 
     p::separator();
@@ -291,7 +380,9 @@ async fn handle_invoke(args: InvokeArgs) -> Result<()> {
         &arg_types,
         &args.network,
         submit_wallet.as_ref(),
-    ).await?;
+        signing_request.as_ref(),
+    )
+    .await?;
 
     let simulation_result = outcome.simulation;
     p::kv_accent("Simulation", "✓ Success");
@@ -399,9 +490,44 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
 
     let graph = call_graph::extract_call_graph(&args.path)?;
 
+    // Filter patterns by minimum severity, if requested.
+    let effective_patterns: Vec<call_graph::CallPattern> = if let Some(min) = &args.severity {
+        let rank = |s: &str| match s {
+            "high" => 3,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0,
+        };
+        let threshold = rank(min);
+        graph
+            .patterns
+            .iter()
+            .filter(|p| rank(&p.severity) >= threshold)
+            .cloned()
+            .collect()
+    } else {
+        graph.patterns.clone()
+    };
+
     let output = match args.format.as_str() {
         "dot" => call_graph::render_dot(&graph),
-        "json" => serde_json::to_string_pretty(&graph)?,
+        "json" => {
+            // Backwards-compatible JSON: keep the full `CallGraph` shape at the
+            // top level (so existing consumers still work) and *additionally*
+            // include `_stats` and `_filtered_patterns` next to it.
+            let mut view = serde_json::to_value(&graph)?;
+            if let Some(obj) = view.as_object_mut() {
+                obj.insert(
+                    "_stats".to_string(),
+                    serde_json::to_value(call_graph::compute_stats(&graph))?,
+                );
+                obj.insert(
+                    "_filtered_patterns".to_string(),
+                    serde_json::to_value(&effective_patterns)?,
+                );
+            }
+            serde_json::to_string_pretty(&view)?
+        }
         _ => call_graph::render_ascii(&graph),
     };
 
@@ -417,10 +543,10 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
     p::kv("Edges", &graph.edges.len().to_string());
     p::kv("Dependencies", &graph.dependencies.len().to_string());
 
-    if args.patterns && !graph.patterns.is_empty() {
+    if args.patterns && !effective_patterns.is_empty() {
         println!();
         p::header("Pattern Analysis");
-        for pat in &graph.patterns {
+        for pat in &effective_patterns {
             let icon = match pat.severity.as_str() {
                 "high" => "⚠",
                 "medium" => "⚡",
@@ -433,6 +559,176 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
         p::info("Use `starforge security audit <path>` for a full security report.");
     }
 
+    if args.stats {
+        let stats = call_graph::compute_stats(&graph);
+        println!();
+        p::header("Graph Statistics");
+        println!(
+            "  {:<24} {}",
+            "Total nodes".dimmed(),
+            stats.total_nodes.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Total edges".dimmed(),
+            stats.total_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "  external".dimmed(),
+            stats.external_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "  internal".dimmed(),
+            stats.internal_edges.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Direct invokes".dimmed(),
+            stats.direct_invokes.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Client constructions".dimmed(),
+            stats.client_constructions.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Dependencies".dimmed(),
+            stats.dependencies.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Patterns (h/m/l)".dimmed(),
+            format!(
+                "{} / {} / {}",
+                stats.patterns_high, stats.patterns_medium, stats.patterns_low
+            )
+            .bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Max out-degree".dimmed(),
+            stats.fan_out_max.to_string().bright_white()
+        );
+        println!(
+            "  {:<24} {}",
+            "Max in-degree".dimmed(),
+            stats.fan_in_max.to_string().bright_white()
+        );
+    }
+
+    if args.optimize {
+        // Compute suggestions on the unfiltered graph (most suggestions are
+        // derived from edges / dependencies, not patterns) and then post-filter
+        // by priority so `--severity=high` hides low / medium hints without
+        // paying for a full graph clone.
+        let all = call_graph::generate_suggestions(&graph);
+        let suggestions: Vec<_> = if let Some(min) = &args.severity {
+            let rank = |p: &str| match p {
+                "high" => 3,
+                "medium" => 2,
+                _ => 1,
+            };
+            let threshold = rank(min);
+            all.into_iter()
+                .filter(|s| rank(&s.priority) >= threshold)
+                .collect()
+        } else {
+            all
+        };
+        println!();
+        p::header("Optimization Suggestions");
+        if suggestions.is_empty() {
+            p::info("No optimization opportunities detected.");
+        } else {
+            for sug in &suggestions {
+                let icon = match sug.priority.as_str() {
+                    "high" => "▲".red(),
+                    "medium" => "●".yellow(),
+                    _ => "·".cyan(),
+                };
+                println!(
+                    "  {} [{}] {} → {}",
+                    icon,
+                    sug.priority.to_uppercase().dimmed(),
+                    sug.title.bright_white(),
+                    sug.target.bright_green()
+                );
+                println!("      {}", sug.detail.dimmed());
+                if let Some(s) = &sug.estimated_savings {
+                    println!("      est. savings: {}", s.cyan());
+                }
+            }
+        }
+    }
+
     p::success("Call graph extraction complete");
+
+    if args.explore {
+        call_graph::explore_graph(&graph)?;
+    }
+
+    Ok(())
+}
+
+fn handle_deps(args: DepsArgs) -> Result<()> {
+    use crate::utils::contract_deps;
+    let cwd = std::env::current_dir()?;
+    
+    match args.cmd {
+        DepsCommands::Init => {
+            contract_deps::init(&cwd)?;
+            p::success("Initialized contract-dependencies.toml");
+        }
+        DepsCommands::Add(add_args) => {
+            let source = if add_args.path.is_some() || add_args.git.is_some() {
+                contract_deps::DependencySource::Detailed {
+                    version: add_args.version,
+                    path: add_args.path,
+                    git: add_args.git,
+                    branch: add_args.branch,
+                }
+            } else if let Some(v) = add_args.version {
+                contract_deps::DependencySource::Version(v)
+            } else {
+                anyhow::bail!("Must specify at least --version, --path, or --git");
+            };
+            
+            contract_deps::add_dependency(&cwd, &add_args.name, source)?;
+            p::success(&format!("Added dependency '{}'", add_args.name));
+        }
+        DepsCommands::Update(update_args) => {
+            contract_deps::update_dependency(&cwd, &update_args.name, &update_args.version)?;
+            p::success(&format!("Updated dependency '{}' to '{}'", update_args.name, update_args.version));
+        }
+        DepsCommands::Resolve => {
+            p::header("Contract Dependency Deployment Order");
+            let graph = contract_deps::resolve_graph(&cwd)?;
+            let order = contract_deps::resolve_deployment_order(&graph)?;
+            for (i, name) in order.iter().enumerate() {
+                p::step(i + 1, order.len(), name);
+            }
+            if order.is_empty() {
+                p::info("No dependencies found.");
+            }
+        }
+        DepsCommands::Graph(graph_args) => {
+            let graph = contract_deps::resolve_graph(&cwd)?;
+            match graph_args.format.as_str() {
+                "ascii" => {
+                    let out = contract_deps::render_ascii_graph(&graph);
+                    println!("{}", out);
+                }
+                "dot" => {
+                    let out = contract_deps::render_dot_graph(&graph);
+                    println!("{}", out);
+                }
+                _ => anyhow::bail!("Unsupported format. Use 'ascii' or 'dot'"),
+            }
+        }
+    }
+    
     Ok(())
 }

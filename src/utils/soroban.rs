@@ -1,4 +1,5 @@
 use crate::utils::config::{self, WalletEntry};
+use crate::utils::wallet_signer::{self, SigningRequest};
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -92,17 +93,22 @@ pub async fn invoke_contract(
     arg_types: &[String],
     network: &str,
     wallet: Option<&WalletEntry>,
+    signing: Option<&SigningRequest>,
 ) -> Result<InvokeOutcome> {
     let simulation = simulate_transaction(contract_id, function, args, arg_types, network).await?;
     let transaction = match wallet {
-        Some(w) => Some(submit_transaction(
-            contract_id,
-            function,
-            args,
-            arg_types,
-            network,
-            w,
-        ).await?),
+        Some(w) => Some(
+            submit_transaction(
+                contract_id,
+                function,
+                args,
+                arg_types,
+                network,
+                w,
+                signing,
+            )
+            .await?,
+        ),
         None => None,
     };
     Ok(InvokeOutcome {
@@ -183,6 +189,7 @@ pub async fn submit_transaction(
     arg_types: &[String],
     network: &str,
     wallet: &WalletEntry,
+    signing: Option<&SigningRequest>,
 ) -> Result<TransactionResult> {
     let rpc_url = get_rpc_url(network)?;
 
@@ -190,8 +197,14 @@ pub async fn submit_transaction(
     let xdr_args = encode_arguments(args, arg_types)?;
 
     // Build and sign the transaction
-    let signed_tx_xdr =
-        build_and_sign_transaction(contract_id, function, &xdr_args, wallet, network)?;
+    let signed_tx_xdr = build_and_sign_transaction(
+        contract_id,
+        function,
+        &xdr_args,
+        wallet,
+        network,
+        signing,
+    )?;
 
     // Build the submission request
     let request = SorobanRpcRequest {
@@ -481,10 +494,14 @@ fn build_and_sign_transaction(
     function: &str,
     args: &[String],
     wallet: &WalletEntry,
-    _network: &str,
+    network: &str,
+    signing: Option<&SigningRequest>,
 ) -> Result<String> {
-    // This is a simplified mock implementation
-    // In production, you'd use stellar-sdk to build and sign proper transaction XDR
+    let tx_xdr = build_transaction_xdr(contract_id, function, args)?;
+    if let Some(request) = signing {
+        return wallet_signer::sign_transaction_xdr(&tx_xdr, request);
+    }
+
     Ok(format!(
         "signed_mock_transaction_xdr_{}_{}_{}_{}",
         contract_id,
@@ -492,6 +509,16 @@ fn build_and_sign_transaction(
         args.len(),
         wallet.name
     ))
+}
+
+pub fn sign_deploy_transaction(
+    wasm_hash: &str,
+    wallet: &WalletEntry,
+    network: &str,
+    signing: &SigningRequest,
+) -> Result<String> {
+    let tx_xdr = build_deploy_transaction_xdr(wasm_hash, wallet, network)?;
+    wallet_signer::sign_transaction_xdr(&tx_xdr, signing)
 }
 
 fn build_deploy_transaction_xdr(
