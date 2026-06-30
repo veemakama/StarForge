@@ -1,4 +1,7 @@
-use crate::utils::{config, mock_soroban, soroban, test_coverage};
+use crate::utils::{
+    config, mock_soroban, soroban,
+    test_coverage::{self, CoverageTestExecution},
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -66,18 +69,13 @@ pub struct StateEntry {
     pub scope: StorageScope,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageScope {
+    #[default]
     Instance,
     Persistent,
     Temporary,
-}
-
-impl Default for StorageScope {
-    fn default() -> Self {
-        Self::Instance
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,9 +308,16 @@ pub async fn run_contract_framework_with_spec(
                 fs::read_to_string(source)
                     .with_context(|| format!("Failed to read {}", source.display()))
                     .map(|content| {
-                        let executed: Vec<String> =
-                            cases.iter().map(|case| case.function.clone()).collect();
-                        test_coverage::analyze_source_coverage(&content, &executed)
+                        let executions = cases
+                            .iter()
+                            .map(|case| {
+                                CoverageTestExecution::new(case.name.clone(), case.function.clone())
+                            })
+                            .collect::<Vec<_>>();
+                        test_coverage::analyze_source_coverage_with_executions(
+                            &content,
+                            &executions,
+                        )
                     })
             })
             .transpose()?
@@ -771,7 +776,14 @@ fn render_html_report(report: &ContractFrameworkReport) -> String {
     let coverage = report
         .coverage
         .as_ref()
-        .map(|coverage| format!("<p>Coverage: {:.1}%</p>", coverage.coverage_percent))
+        .map(|coverage| {
+            format!(
+                "<p>Coverage: {:.1}% | Functions: {:.1}% | Branches: {:.1}%</p>",
+                coverage.coverage_percent,
+                coverage.function_coverage_percent,
+                coverage.branch_coverage_percent
+            )
+        })
         .unwrap_or_default();
 
     let testnet = report

@@ -131,8 +131,8 @@ pub struct GasCostBreakdown {
 impl GasCostBreakdown {
     pub fn compute(profile: &WasmSectionProfile, size_bytes: usize) -> Self {
         let upload_cost = (size_bytes as u64).saturating_mul(FEE_PER_CODE_BYTE);
-        let cpu_cost = (profile.estimated_instruction_count as u64)
-            .saturating_mul(CPU_PER_INSTRUCTION);
+        let cpu_cost =
+            (profile.estimated_instruction_count as u64).saturating_mul(CPU_PER_INSTRUCTION);
         let import_cost = (profile.import_count as u64).saturating_mul(FEE_PER_IMPORT);
         let export_cost = (profile.export_count as u64).saturating_mul(FEE_PER_EXPORT);
         let global_cost = (profile.global_count as u64).saturating_mul(FEE_PER_GLOBAL);
@@ -409,8 +409,7 @@ pub fn generate_findings(bytes: &[u8], profile: &WasmSectionProfile) -> Vec<GasF
                 size_kb, size_limit_pct
             ),
             recommendation:
-                "Apply `opt-level = 'z'` and `lto = true`. Use `wasm-opt -Oz` post-build."
-                    .into(),
+                "Apply `opt-level = 'z'` and `lto = true`. Use `wasm-opt -Oz` post-build.".into(),
             estimated_saving_pct: 20.0,
             estimated_gas_saving: (bytes.len() as u64).saturating_mul(FEE_PER_CODE_BYTE) / 5,
         });
@@ -420,9 +419,7 @@ pub fn generate_findings(bytes: &[u8], profile: &WasmSectionProfile) -> Vec<GasF
             kind: "binary-size-medium".into(),
             severity: FindingSeverity::Medium,
             description: format!("WASM is {:.1} KB — moderately large.", size_kb),
-            recommendation:
-                "Use `opt-level = 's'` and `lto = true`. Strip unused symbols."
-                    .into(),
+            recommendation: "Use `opt-level = 's'` and `lto = true`. Strip unused symbols.".into(),
             estimated_saving_pct: 10.0,
             estimated_gas_saving: (bytes.len() as u64).saturating_mul(FEE_PER_CODE_BYTE) / 10,
         });
@@ -483,8 +480,7 @@ pub fn generate_findings(bytes: &[u8], profile: &WasmSectionProfile) -> Vec<GasF
                 print_count
             ),
             recommendation:
-                "Remove all `println!` / `eprintln!` / `log::` calls from contract code."
-                    .into(),
+                "Remove all `println!` / `eprintln!` / `log::` calls from contract code.".into(),
             estimated_saving_pct: 5.0,
             estimated_gas_saving: (print_count as u64) * 300,
         });
@@ -500,10 +496,9 @@ pub fn generate_findings(bytes: &[u8], profile: &WasmSectionProfile) -> Vec<GasF
                 "{} imported functions — each adds ~{} gas units at upload.",
                 profile.import_count, FEE_PER_IMPORT
             ),
-            recommendation:
-                "Audit SDK imports; use only required host functions. \
+            recommendation: "Audit SDK imports; use only required host functions. \
                  Enable `default-features = false` on soroban-sdk."
-                    .into(),
+                .into(),
             estimated_saving_pct: 5.0,
             estimated_gas_saving: ((profile.import_count.saturating_sub(10)) as u64)
                 .saturating_mul(FEE_PER_IMPORT),
@@ -679,8 +674,8 @@ fn top_recommendations(findings: &[GasFinding]) -> Vec<String> {
 
 /// Perform a full gas analysis on a WASM file.
 pub fn analyze_wasm_file(path: &Path, label: Option<&str>) -> Result<GasAnalysisReport> {
-    let bytes = fs::read(path)
-        .with_context(|| format!("Failed to read WASM file: {}", path.display()))?;
+    let bytes =
+        fs::read(path).with_context(|| format!("Failed to read WASM file: {}", path.display()))?;
 
     if !is_valid_wasm(&bytes) {
         anyhow::bail!(
@@ -690,14 +685,12 @@ pub fn analyze_wasm_file(path: &Path, label: Option<&str>) -> Result<GasAnalysis
     }
 
     let sha256 = hex::encode(Sha256::digest(&bytes));
-    let contract_label = label
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        });
+    let contract_label = label.map(str::to_string).unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
 
     let profile = parse_wasm_sections(&bytes);
     let gas_cost = GasCostBreakdown::compute(&profile, bytes.len());
@@ -743,9 +736,7 @@ pub fn compare_versions(baseline: &Path, candidate: &Path) -> Result<GasVersionC
     let instr_delta = cand_report.section_profile.estimated_instruction_count as i64
         - base_report.section_profile.estimated_instruction_count as i64;
     let instr_delta_pct = if base_report.section_profile.estimated_instruction_count > 0 {
-        instr_delta as f64
-            / base_report.section_profile.estimated_instruction_count as f64
-            * 100.0
+        instr_delta as f64 / base_report.section_profile.estimated_instruction_count as f64 * 100.0
     } else {
         0.0
     };
@@ -777,8 +768,7 @@ pub fn compare_versions(baseline: &Path, candidate: &Path) -> Result<GasVersionC
     } else if gas_delta > 0 {
         format!(
             "Regressed — candidate costs ~{} more gas ({:.1}% increase)",
-            gas_delta,
-            gas_delta_pct
+            gas_delta, gas_delta_pct
         )
     } else {
         "No change in estimated gas cost".to_string()

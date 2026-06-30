@@ -1,5 +1,5 @@
-use super::BridgeConfig;
 use super::providers::BridgeTransferRequest;
+use super::BridgeConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,13 +46,13 @@ impl SecurityVerifier {
     }
 
     pub fn verify_transfer(&self, request: &BridgeTransferRequest) -> SecurityReport {
-        let mut checks = Vec::new();
-
-        checks.push(self.check_source_network(&request.source_network));
-        checks.push(self.check_dest_network(&request.dest_network));
-        checks.push(self.check_amount(request.amount));
-        checks.push(self.check_recipient_format(&request.recipient, &request.dest_network));
-        checks.push(self.check_asset(&request.asset));
+        let checks = vec![
+            self.check_source_network(&request.source_network),
+            self.check_dest_network(&request.dest_network),
+            self.check_amount(request.amount),
+            self.check_recipient_format(&request.recipient, &request.dest_network),
+            self.check_asset(&request.asset),
+        ];
 
         let passed = checks.iter().all(|c| c.result != SecurityCheck::Failed);
 
@@ -164,10 +164,7 @@ impl SecurityVerifier {
             SecurityCheckResult {
                 name: "recipient_format".to_string(),
                 result: SecurityCheck::Failed,
-                detail: format!(
-                    "Invalid recipient format for network '{}'",
-                    dest_network
-                ),
+                detail: format!("Invalid recipient format for network '{}'", dest_network),
             }
         }
     }

@@ -305,20 +305,24 @@ async fn handle_verify(args: VerifyArgs) -> Result<()> {
     if let Some(wallet) = cfg.wallets.iter().find(|w| w.name == record.wallet) {
         match horizon::fetch_account(&wallet.public_key, &record.network).await {
             Ok(_) => {
-                report.checks.push(crate::utils::deployment_verify::VerificationCheck {
-                    name: "wallet_active".to_string(),
-                    category: "functionality".to_string(),
-                    status: crate::utils::deployment_verify::CheckStatus::Passed,
-                    detail: format!("Wallet '{}' is active on-chain", record.wallet),
-                });
+                report
+                    .checks
+                    .push(crate::utils::deployment_verify::VerificationCheck {
+                        name: "wallet_active".to_string(),
+                        category: "functionality".to_string(),
+                        status: crate::utils::deployment_verify::CheckStatus::Passed,
+                        detail: format!("Wallet '{}' is active on-chain", record.wallet),
+                    });
             }
             Err(e) => {
-                report.checks.push(crate::utils::deployment_verify::VerificationCheck {
-                    name: "wallet_active".to_string(),
-                    category: "functionality".to_string(),
-                    status: crate::utils::deployment_verify::CheckStatus::Warning,
-                    detail: format!("Could not verify wallet: {}", e),
-                });
+                report
+                    .checks
+                    .push(crate::utils::deployment_verify::VerificationCheck {
+                        name: "wallet_active".to_string(),
+                        category: "functionality".to_string(),
+                        status: crate::utils::deployment_verify::CheckStatus::Warning,
+                        detail: format!("Could not verify wallet: {}", e),
+                    });
             }
         }
     }
@@ -349,7 +353,10 @@ async fn handle_verify(args: VerifyArgs) -> Result<()> {
             .iter()
             .filter(|c| c.status == crate::utils::deployment_verify::CheckStatus::Passed)
             .count();
-        p::kv("Checks passed", &format!("{}/{}", passed_count, report.checks.len()));
+        p::kv(
+            "Checks passed",
+            &format!("{}/{}", passed_count, report.checks.len()),
+        );
     }
 
     if args.report || args.save {

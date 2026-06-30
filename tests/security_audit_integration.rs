@@ -101,7 +101,9 @@ fn score_decreases_with_medium_finding() {
 
 #[test]
 fn score_floored_at_zero_many_criticals() {
-    let findings: Vec<_> = (0..10).map(|_| make_finding("critical", "builtin")).collect();
+    let findings: Vec<_> = (0..10)
+        .map(|_| make_finding("critical", "builtin"))
+        .collect();
     let result = make_audit_result(findings);
     assert_eq!(result.score, 0.0);
 }
@@ -250,7 +252,9 @@ fn ci_mode_passes_when_score_meets_threshold() {
 #[test]
 fn ci_mode_fails_when_score_below_threshold() {
     // 4 criticals → score = max(0, 100 - 120) = 0
-    let findings: Vec<_> = (0..4).map(|_| make_finding("critical", "builtin")).collect();
+    let findings: Vec<_> = (0..4)
+        .map(|_| make_finding("critical", "builtin"))
+        .collect();
     let result = make_audit_result(findings);
     assert!(
         result.score < 60.0,

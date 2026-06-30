@@ -31,12 +31,7 @@ impl RouteRegistry {
         &self.routes
     }
 
-    pub fn find(
-        &self,
-        source: &str,
-        dest: &str,
-        asset: Option<&str>,
-    ) -> Vec<&BridgeRoute> {
+    pub fn find(&self, source: &str, dest: &str, asset: Option<&str>) -> Vec<&BridgeRoute> {
         self.routes
             .iter()
             .filter(|r| {
@@ -56,7 +51,6 @@ impl RouteRegistry {
         self.find(source, dest, Some(asset))
             .into_iter()
             .min_by_key(|r| r.fee_bps)
-            .copied()
     }
 }
 

@@ -54,19 +54,23 @@ impl StateSynchronizer {
     }
 
     pub fn mark_pending(&mut self, transfer_id: &str) {
-        if !self.state.pending_transfers.contains(&transfer_id.to_string()) {
+        if !self
+            .state
+            .pending_transfers
+            .contains(&transfer_id.to_string())
+        {
             self.state.pending_transfers.push(transfer_id.to_string());
         }
     }
 
     pub fn mark_completed(&mut self, transfer_id: &str) {
-        self.state
-            .pending_transfers
-            .retain(|id| id != transfer_id);
-        if !self.state.completed_transfers.contains(&transfer_id.to_string()) {
-            self.state
-                .completed_transfers
-                .push(transfer_id.to_string());
+        self.state.pending_transfers.retain(|id| id != transfer_id);
+        if !self
+            .state
+            .completed_transfers
+            .contains(&transfer_id.to_string())
+        {
+            self.state.completed_transfers.push(transfer_id.to_string());
         }
     }
 
@@ -96,6 +100,12 @@ impl StateSynchronizer {
     }
 }
 
+impl Default for StateSynchronizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn deterministic_balance(ledger: u32) -> u64 {
     (ledger as u64).wrapping_mul(1_000_000_000)
 }
@@ -120,6 +130,9 @@ mod tests {
         assert!(sync.state().pending_transfers.contains(&"tx-1".to_string()));
         sync.mark_completed("tx-1");
         assert!(!sync.state().pending_transfers.contains(&"tx-1".to_string()));
-        assert!(sync.state().completed_transfers.contains(&"tx-1".to_string()));
+        assert!(sync
+            .state()
+            .completed_transfers
+            .contains(&"tx-1".to_string()));
     }
 }

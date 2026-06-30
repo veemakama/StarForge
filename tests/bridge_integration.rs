@@ -1,8 +1,11 @@
 //! Integration tests for cross-chain bridge support.
 
 use starforge::utils::bridge::{
-    load_config, providers::{BridgeTransferRequest, TransferStatus},
-    routes::RouteRegistry, security::SecurityVerifier, state::StateSynchronizer,
+    load_config,
+    providers::{BridgeTransferRequest, TransferStatus},
+    routes::RouteRegistry,
+    security::SecurityVerifier,
+    state::StateSynchronizer,
     BridgeConfig,
 };
 
@@ -59,7 +62,10 @@ fn state_synchronizer_tracks_transfers() {
     sync.sync("stellar-testnet", "ethereum-sepolia", 100, 200);
     sync.mark_pending("tx-abc");
     sync.mark_completed("tx-abc");
-    assert!(sync.state().completed_transfers.contains(&"tx-abc".to_string()));
+    assert!(sync
+        .state()
+        .completed_transfers
+        .contains(&"tx-abc".to_string()));
     assert!(sync.state().pending_transfers.is_empty());
 }
 
@@ -75,7 +81,8 @@ fn transfer_initiation_produces_result() {
         sender: "GABC".to_string(),
         recipient: "0x1234567890123456789012345678901234567890".to_string(),
     };
-    let result = starforge::utils::bridge::providers::initiate_transfer(provider, &request).unwrap();
+    let result =
+        starforge::utils::bridge::providers::initiate_transfer(provider, &request).unwrap();
     assert!(!result.transfer_id.is_empty());
     assert_eq!(result.status, TransferStatus::SourceConfirmed);
 }

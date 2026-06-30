@@ -259,8 +259,14 @@ mod tests {
 
     #[test]
     fn parses_format_strings() {
-        assert!(matches!(ReportFormat::parse("json").unwrap(), ReportFormat::Json));
-        assert!(matches!(ReportFormat::parse("HTML").unwrap(), ReportFormat::Html));
+        assert!(matches!(
+            ReportFormat::parse("json").unwrap(),
+            ReportFormat::Json
+        ));
+        assert!(matches!(
+            ReportFormat::parse("HTML").unwrap(),
+            ReportFormat::Html
+        ));
         assert!(ReportFormat::parse("bogus").is_err());
     }
 }

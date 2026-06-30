@@ -531,7 +531,13 @@ fn multisig_create_and_sign_workflow() {
     let created_path = entries[0].path();
 
     let sign_alice = starforge(home.path())
-        .args(["multisig", "sign", created_path.to_str().unwrap(), "--wallet", "alice"])
+        .args([
+            "multisig",
+            "sign",
+            created_path.to_str().unwrap(),
+            "--wallet",
+            "alice",
+        ])
         .output()
         .expect("spawn multisig sign alice");
     assert_success(&sign_alice, "starforge multisig sign alice");
@@ -546,7 +552,13 @@ fn multisig_create_and_sign_workflow() {
     assert!(status_out.contains("50%"));
 
     let sign_bob = starforge(home.path())
-        .args(["multisig", "sign", created_path.to_str().unwrap(), "--wallet", "bob"])
+        .args([
+            "multisig",
+            "sign",
+            created_path.to_str().unwrap(),
+            "--wallet",
+            "bob",
+        ])
         .output()
         .expect("spawn multisig sign bob");
     assert_success(&sign_bob, "starforge multisig sign bob");
@@ -585,13 +597,25 @@ fn multisig_create_and_sign_workflow() {
     assert_success(&import, "starforge multisig import");
 
     let notify = starforge(home.path())
-        .args(["multisig", "notify", import_path.to_str().unwrap(), "--channel", "email"])
+        .args([
+            "multisig",
+            "notify",
+            import_path.to_str().unwrap(),
+            "--channel",
+            "email",
+        ])
         .output()
         .expect("spawn multisig notify");
     assert_success(&notify, "starforge multisig notify");
 
     let submit = starforge(home.path())
-        .args(["multisig", "submit", import_path.to_str().unwrap(), "--network", "testnet"])
+        .args([
+            "multisig",
+            "submit",
+            import_path.to_str().unwrap(),
+            "--network",
+            "testnet",
+        ])
         .output()
         .expect("spawn multisig submit");
     assert_success(&submit, "starforge multisig submit");

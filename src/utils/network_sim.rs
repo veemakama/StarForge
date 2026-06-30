@@ -178,8 +178,7 @@ impl NetworkSimulator {
 
     /// Save current state under `name`.
     pub fn snapshot(&mut self, name: &str) {
-        self.snapshots
-            .insert(name.to_string(), self.state.clone());
+        self.snapshots.insert(name.to_string(), self.state.clone());
     }
 
     /// Restore state from a previously saved snapshot.
@@ -215,7 +214,8 @@ impl NetworkSimulator {
         self.check_failure()?;
         self.simulate_latency();
 
-        let contract_id = deterministic_contract_id(wasm_hash, self.seed, self.state.ledger_sequence);
+        let contract_id =
+            deterministic_contract_id(wasm_hash, self.seed, self.state.ledger_sequence);
         let contract = SimContract {
             contract_id: contract_id.clone(),
             wasm_hash: wasm_hash.to_string(),
@@ -236,7 +236,9 @@ impl NetworkSimulator {
             wasm_hash: wasm_hash.to_string(),
             storage: HashMap::new(),
         };
-        self.state.contracts.insert(contract_id.to_string(), contract);
+        self.state
+            .contracts
+            .insert(contract_id.to_string(), contract);
         self.state.ledger_sequence += 1;
         Ok(())
     }
@@ -360,8 +362,8 @@ impl NetworkSimulator {
         Ok(())
     }
 
-    fn check_failure(&self) -> Result<()> {
-        match &self.failure_mode {
+    fn check_failure(&mut self) -> Result<()> {
+        match self.failure_mode.clone() {
             FailureMode::None => Ok(()),
             FailureMode::RpcTimeout => {
                 anyhow::bail!("Simulated RPC timeout (injected failure)")
@@ -377,7 +379,7 @@ impl NetworkSimulator {
             }
             FailureMode::Random { probability_pct } => {
                 let roll = self.next_random() % 100;
-                if roll < *probability_pct as u64 {
+                if roll < probability_pct as u64 {
                     anyhow::bail!(
                         "Simulated random failure ({}% probability, roll={})",
                         probability_pct,

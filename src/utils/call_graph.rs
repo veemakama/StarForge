@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -384,7 +385,10 @@ fn detect_patterns(edges: &[CallEdge], content: &str) -> Vec<CallPattern> {
     // Direct recursion: caller == callee on an internal edge indicates
     // a function calls itself, which may stack-blow unless bounded.
     let mut saw_recursion = false;
-    for edge in edges.iter().filter(|e| e.call_type == CallType::InternalCall) {
+    for edge in edges
+        .iter()
+        .filter(|e| e.call_type == CallType::InternalCall)
+    {
         if edge.caller == edge.callee && !saw_recursion {
             patterns.push(CallPattern {
                 name: "recursive-call-cycle".to_string(),
@@ -407,12 +411,7 @@ fn detect_patterns(edges: &[CallEdge], content: &str) -> Vec<CallPattern> {
         .map(|e| (e.caller.as_str(), e.callee.as_str()))
         .collect();
     for (a, b) in internal_pairs.iter() {
-        if a != b
-            && internal_pairs
-                .iter()
-                .any(|(x, y)| *x == *b && *y == *a)
-            && !saw_mutual
-        {
+        if a != b && internal_pairs.iter().any(|(x, y)| *x == *b && *y == *a) && !saw_mutual {
             patterns.push(CallPattern {
                 name: "mutual-recursion".to_string(),
                 description: format!(
@@ -429,7 +428,10 @@ fn detect_patterns(edges: &[CallEdge], content: &str) -> Vec<CallPattern> {
     // Fan-out heuristic: a single function that calls too many distinct
     // externals raises the attack surface.
     let mut out_targets: HashMap<&str, HashSet<&str>> = HashMap::new();
-    for edge in edges.iter().filter(|e| e.call_type != CallType::InternalCall) {
+    for edge in edges
+        .iter()
+        .filter(|e| e.call_type != CallType::InternalCall)
+    {
         out_targets
             .entry(edge.caller.as_str())
             .or_default()
@@ -452,7 +454,10 @@ fn detect_patterns(edges: &[CallEdge], content: &str) -> Vec<CallPattern> {
 
     // Repeated identical external calls — likely candidates for caching.
     let mut pair_count: HashMap<(&str, &str), usize> = HashMap::new();
-    for edge in edges.iter().filter(|e| e.call_type == CallType::DirectInvoke) {
+    for edge in edges
+        .iter()
+        .filter(|e| e.call_type == CallType::DirectInvoke)
+    {
         *pair_count
             .entry((edge.caller.as_str(), edge.callee.as_str()))
             .or_insert(0) += 1;
@@ -612,15 +617,9 @@ pub fn explore_graph(graph: &CallGraph) -> anyhow::Result<()> {
     loop {
         println!();
         println!("{}", "═".repeat(64).dimmed());
-        println!(
-            "  {}  Cross-Contract Call Explorer",
-            "🛰".bright_cyan()
-        );
+        println!("  {}  Cross-Contract Call Explorer", "🛰".bright_cyan());
         println!("{}", "═".repeat(64).dimmed());
-        println!(
-            "  Root contract: {}",
-            graph.root.bright_white().bold()
-        );
+        println!("  Root contract: {}", graph.root.bright_white().bold());
         println!(
             "  Nodes: {}   Edges: {}   Patterns: {}",
             graph.nodes.len(),
@@ -806,10 +805,7 @@ fn print_node_details(graph: &CallGraph, node: &CallNode) {
         .filter(|e| e.caller == node.name)
         .collect();
 
-    println!(
-        "\n  Outgoing calls ({}):",
-        outgoing.len()
-    );
+    println!("\n  Outgoing calls ({}):", outgoing.len());
     if outgoing.is_empty() {
         println!("    (none)");
     } else {
@@ -829,10 +825,7 @@ fn print_node_details(graph: &CallGraph, node: &CallNode) {
         }
     }
 
-    println!(
-        "\n  Incoming calls ({}):",
-        incoming.len()
-    );
+    println!("\n  Incoming calls ({}):", incoming.len());
     if incoming.is_empty() {
         println!("    (none)");
     } else {
@@ -850,7 +843,6 @@ fn print_node_details(graph: &CallGraph, node: &CallNode) {
         }
     }
 }
-
 
 pub fn render_ascii(graph: &CallGraph) -> String {
     let mut out = String::new();
@@ -1100,10 +1092,7 @@ mod tests {
 
     #[test]
     fn patterns_flag_recursion() {
-        let g = mk_graph(
-            vec![edge("root", "root", CallType::InternalCall)],
-            vec![],
-        );
+        let g = mk_graph(vec![edge("root", "root", CallType::InternalCall)], vec![]);
         assert!(g.patterns.iter().any(|p| p.name == "recursive-call-cycle"));
     }
 

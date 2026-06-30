@@ -1,7 +1,13 @@
 use crate::utils::bridge::{
-    load_config, load_transfers, providers::{self, BridgeTransferRequest, TransferStatus},
-    record_transfer, routes::RouteRegistry, save_config, security::SecurityVerifier,
-    state::StateSynchronizer, monitoring::BridgeMonitor, BridgeConfig, BridgeTransferRecord,
+    load_config, load_transfers,
+    monitoring::BridgeMonitor,
+    providers::{self, BridgeTransferRequest, TransferStatus},
+    record_transfer,
+    routes::RouteRegistry,
+    save_config,
+    security::SecurityVerifier,
+    state::StateSynchronizer,
+    BridgeConfig, BridgeTransferRecord,
 };
 use crate::utils::print as p;
 use anyhow::Result;
@@ -255,7 +261,10 @@ fn handle_status(args: StatusArgs) -> Result<()> {
 
     p::kv("Transfer ID", &record.id);
     p::kv("Status", &status.to_string());
-    p::kv("Source", &format!("{} → {}", record.source_network, record.asset));
+    p::kv(
+        "Source",
+        &format!("{} → {}", record.source_network, record.asset),
+    );
     p::kv("Dest", &record.dest_network);
     p::kv("Amount", &record.amount.to_string());
     if let Some(ref tx) = record.tx_hash_source {
@@ -315,10 +324,11 @@ fn handle_routes(args: RoutesArgs) -> Result<()> {
 fn handle_configure(args: ConfigureArgs) -> Result<()> {
     let mut config = load_config()?;
 
-    if args.show || (!args.enable.is_some()
-        && args.default_provider.is_none()
-        && args.max_amount.is_none()
-        && args.require_proof.is_none())
+    if args.show
+        || (args.enable.is_none()
+            && args.default_provider.is_none()
+            && args.max_amount.is_none()
+            && args.require_proof.is_none())
     {
         p::header("Bridge Configuration");
         p::kv("Enabled", &config.enabled.to_string());
@@ -371,7 +381,10 @@ fn handle_sync(args: SyncArgs) -> Result<()> {
     p::kv("Dest ledger", &args.dest_ledger.to_string());
     p::kv("In sync", &sync.is_in_sync(1000).to_string());
     p::kv("Pending", &sync.state().pending_transfers.len().to_string());
-    p::kv("Completed", &sync.state().completed_transfers.len().to_string());
+    p::kv(
+        "Completed",
+        &sync.state().completed_transfers.len().to_string(),
+    );
     p::success("State synchronized");
     Ok(())
 }
@@ -431,7 +444,10 @@ fn handle_monitor(args: MonitorArgs) -> Result<()> {
     }
 
     p::header("Bridge Monitoring");
-    p::kv("Unacknowledged alerts", &monitor.unacknowledged_count().to_string());
+    p::kv(
+        "Unacknowledged alerts",
+        &monitor.unacknowledged_count().to_string(),
+    );
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(monitor.alerts())?);

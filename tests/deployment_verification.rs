@@ -1,9 +1,7 @@
 //! Integration tests for deployment verification system.
 
 use starforge::utils::deploy_history::{DeployRecord, DeployStatus};
-use starforge::utils::deployment_verify::{
-    generate_ci_snippet, CheckStatus, DeploymentVerifier,
-};
+use starforge::utils::deployment_verify::{generate_ci_snippet, CheckStatus, DeploymentVerifier};
 
 fn sample_record() -> DeployRecord {
     DeployRecord {
