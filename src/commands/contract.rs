@@ -99,6 +99,8 @@ pub struct UploadArgs {
 pub enum BindingLang {
     Rust,
     Ts,
+    Python,
+    Go,
 }
 
 #[derive(Args)]
@@ -126,6 +128,8 @@ fn handle_generate_bindings(args: GenerateBindingsArgs) -> Result<()> {
     let lang = match args.lang {
         BindingLang::Rust => bindings::BindingLanguage::Rust,
         BindingLang::Ts => bindings::BindingLanguage::TypeScript,
+        BindingLang::Python => bindings::BindingLanguage::Python,
+        BindingLang::Go => bindings::BindingLanguage::Go,
     };
     let generated = bindings::generate_bindings(&args.wasm_file, lang)?;
     println!("{}", generated);
