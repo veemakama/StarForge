@@ -19,6 +19,61 @@ pub enum ContractCommands {
     GenerateBindings(GenerateBindingsArgs),
     /// Visualize cross-contract call graph from Soroban source
     CallGraph(CallGraphArgs),
+    /// Manage contract dependencies
+    Deps(DepsArgs),
+}
+
+#[derive(Args)]
+pub struct DepsArgs {
+    #[command(subcommand)]
+    pub cmd: DepsCommands,
+}
+
+#[derive(Subcommand)]
+pub enum DepsCommands {
+    /// Initialize contract-dependencies.toml
+    Init,
+    /// Add a contract dependency
+    Add(DepsAddArgs),
+    /// Update a contract dependency
+    Update(DepsUpdateArgs),
+    /// Resolve and show deployment order
+    Resolve,
+    /// Visualize the dependency graph
+    Graph(DepsGraphArgs),
+}
+
+#[derive(Args)]
+pub struct DepsAddArgs {
+    /// Name of the dependency
+    pub name: String,
+    /// Version constraint
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Local path
+    #[arg(long)]
+    pub path: Option<String>,
+    /// Git repository URL
+    #[arg(long)]
+    pub git: Option<String>,
+    /// Git branch
+    #[arg(long)]
+    pub branch: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DepsUpdateArgs {
+    /// Name of the dependency to update
+    pub name: String,
+    /// New version constraint
+    pub version: String,
+}
+
+#[derive(Args)]
+pub struct DepsGraphArgs {
+    /// Format: ascii or dot
+    #[arg(long, default_value = "ascii")]
+    pub format: String,
 }
 
 #[derive(Args)]
@@ -132,6 +187,7 @@ pub async fn handle(cmd: ContractCommands) -> Result<()> {
         ContractCommands::Upload(args) => handle_upload(args),
         ContractCommands::GenerateBindings(args) => handle_generate_bindings(args),
         ContractCommands::CallGraph(args) => handle_call_graph(args),
+        ContractCommands::Deps(args) => handle_deps(args),
     }
 }
 
@@ -614,5 +670,65 @@ fn handle_call_graph(args: CallGraphArgs) -> Result<()> {
         call_graph::explore_graph(&graph)?;
     }
 
+    Ok(())
+}
+
+fn handle_deps(args: DepsArgs) -> Result<()> {
+    use crate::utils::contract_deps;
+    let cwd = std::env::current_dir()?;
+    
+    match args.cmd {
+        DepsCommands::Init => {
+            contract_deps::init(&cwd)?;
+            p::success("Initialized contract-dependencies.toml");
+        }
+        DepsCommands::Add(add_args) => {
+            let source = if add_args.path.is_some() || add_args.git.is_some() {
+                contract_deps::DependencySource::Detailed {
+                    version: add_args.version,
+                    path: add_args.path,
+                    git: add_args.git,
+                    branch: add_args.branch,
+                }
+            } else if let Some(v) = add_args.version {
+                contract_deps::DependencySource::Version(v)
+            } else {
+                anyhow::bail!("Must specify at least --version, --path, or --git");
+            };
+            
+            contract_deps::add_dependency(&cwd, &add_args.name, source)?;
+            p::success(&format!("Added dependency '{}'", add_args.name));
+        }
+        DepsCommands::Update(update_args) => {
+            contract_deps::update_dependency(&cwd, &update_args.name, &update_args.version)?;
+            p::success(&format!("Updated dependency '{}' to '{}'", update_args.name, update_args.version));
+        }
+        DepsCommands::Resolve => {
+            p::header("Contract Dependency Deployment Order");
+            let graph = contract_deps::resolve_graph(&cwd)?;
+            let order = contract_deps::resolve_deployment_order(&graph)?;
+            for (i, name) in order.iter().enumerate() {
+                p::step(i + 1, order.len(), name);
+            }
+            if order.is_empty() {
+                p::info("No dependencies found.");
+            }
+        }
+        DepsCommands::Graph(graph_args) => {
+            let graph = contract_deps::resolve_graph(&cwd)?;
+            match graph_args.format.as_str() {
+                "ascii" => {
+                    let out = contract_deps::render_ascii_graph(&graph);
+                    println!("{}", out);
+                }
+                "dot" => {
+                    let out = contract_deps::render_dot_graph(&graph);
+                    println!("{}", out);
+                }
+                _ => anyhow::bail!("Unsupported format. Use 'ascii' or 'dot'"),
+            }
+        }
+    }
+    
     Ok(())
 }
