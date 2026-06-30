@@ -63,6 +63,51 @@ pub fn device_status(_kind: HardwareWalletKind) -> Result<String> {
     anyhow::bail!("Hardware wallet support is disabled in this build.")
 }
 
+#[cfg(not(feature = "hardware-wallet"))]
+pub fn connect_with_timeout(
+    kind: HardwareWalletKind,
+    _timeout: std::time::Duration,
+) -> Result<HardwareWalletInfo> {
+    connect(kind)
+}
+
+#[cfg(not(feature = "hardware-wallet"))]
+pub fn sign_transaction(
+    kind: HardwareWalletKind,
+    _hd_path: &str,
+    _transaction: &[u8],
+    _network_passphrase: &str,
+) -> Result<Vec<u8>> {
+    anyhow::bail!(
+        "Hardware wallet support is disabled in this build.\n\
+         Rebuild with `cargo build --features hardware-wallet` to sign with {}.",
+        kind
+    )
+}
+
+/// Translate hardware wallet failures into actionable recovery guidance.
+pub fn map_signing_error(err: anyhow::Error, kind: HardwareWalletKind) -> anyhow::Error {
+    let message = err.to_string().to_lowercase();
+    let remediation = if message.contains("timeout") || message.contains("timed out") {
+        "Ensure the device is unlocked, the Stellar app is open, and approve the prompt on-screen. Retry when ready."
+    } else if message.contains("not found") || message.contains("no ledger") || message.contains("no trezor") {
+        "Connect the device via USB, unlock it, open the Stellar app, then retry."
+    } else if message.contains("reject") || message.contains("denied") || message.contains("cancel") {
+        "The request was rejected on the device. Review the transaction details and approve to continue."
+    } else if message.contains("status") || message.contains("apdu") {
+        "Close other wallet apps, reopen the Stellar app on the device, and retry the operation."
+    } else {
+        "Verify connectivity, unlock the device, open the Stellar app, and retry. Run `starforge diagnostics --wallet ledger|trezor` for a live probe."
+    };
+
+    anyhow::anyhow!(
+        "{} signing failed: {}\nRecovery: {}",
+        kind,
+        err,
+        remediation
+    )
+}
+
 #[cfg(feature = "hardware-wallet")]
 pub fn connect(kind: HardwareWalletKind) -> Result<HardwareWalletInfo> {
     match kind {
@@ -104,13 +149,41 @@ pub fn device_status(kind: HardwareWalletKind) -> Result<String> {
 }
 
 #[cfg(feature = "hardware-wallet")]
-pub fn sign(kind: HardwareWalletKind, message: &[u8]) -> Result<Vec<u8>> {
+pub fn connect_with_timeout(kind: HardwareWalletKind, timeout: std::time::Duration) -> Result<HardwareWalletInfo> {
     match kind {
-        HardwareWalletKind::Ledger => LedgerTransport::connect()?.sign_message(STELLAR_HD_PATH, message),
-        HardwareWalletKind::Trezor => anyhow::bail!(
-            "Trezor Stellar support is available for device detection and address derivation. \
-             Arbitrary message signing is not supported by the Trezor Stellar app; sign a Stellar transaction envelope instead."
-        ),
+        HardwareWalletKind::Ledger => {
+            let transport = LedgerTransport::connect_with_timeout(timeout)?;
+            let stellar_address = transport.get_public_key(STELLAR_HD_PATH).ok();
+            Ok(HardwareWalletInfo {
+                kind,
+                device_count: transport.device_count,
+                stellar_address,
+                hd_path: STELLAR_HD_PATH.to_string(),
+            })
+        }
+        HardwareWalletKind::Trezor => TrezorTransport::connect_info(STELLAR_HD_PATH),
+    }
+}
+
+#[cfg(feature = "hardware-wallet")]
+pub fn sign(kind: HardwareWalletKind, message: &[u8]) -> Result<Vec<u8>> {
+    sign_transaction(kind, STELLAR_HD_PATH, message, "")
+}
+
+#[cfg(feature = "hardware-wallet")]
+pub fn sign_transaction(
+    kind: HardwareWalletKind,
+    hd_path: &str,
+    transaction: &[u8],
+    network_passphrase: &str,
+) -> Result<Vec<u8>> {
+    match kind {
+        HardwareWalletKind::Ledger => {
+            LedgerTransport::connect()?.sign_message(hd_path, transaction)
+        }
+        HardwareWalletKind::Trezor => {
+            TrezorTransport::sign_transaction(hd_path, transaction, network_passphrase)
+        }
     }
 }
 
@@ -201,11 +274,16 @@ fn frame_apdu_for_hid(apdu: &[u8]) -> Vec<[u8; HID_PACKET_SIZE]> {
 struct LedgerTransport {
     device: hidapi::HidDevice,
     device_count: usize,
+    read_timeout_ms: i32,
 }
 
 #[cfg(feature = "hardware-wallet")]
 impl LedgerTransport {
     fn connect() -> Result<Self> {
+        Self::connect_with_timeout(std::time::Duration::from_secs(15))
+    }
+
+    fn connect_with_timeout(timeout: std::time::Duration) -> Result<Self> {
         let api = hidapi::HidApi::new().context("Failed to initialize HID API")?;
         let devices = api
             .device_list()
@@ -225,6 +303,7 @@ impl LedgerTransport {
         Ok(Self {
             device,
             device_count: devices.len(),
+            read_timeout_ms: timeout.as_millis().clamp(500, 60_000) as i32,
         })
     }
 
@@ -243,8 +322,13 @@ impl LedgerTransport {
             let mut packet = [0u8; HID_PACKET_SIZE];
             let read = self
                 .device
-                .read_timeout(&mut packet, 15_000)
-                .context("Timed out waiting for Ledger response")?;
+                .read_timeout(&mut packet, self.read_timeout_ms)
+                .with_context(|| {
+                    format!(
+                        "Timed out waiting for Ledger response after {} ms",
+                        self.read_timeout_ms
+                    )
+                })?;
 
             if read < 5 {
                 anyhow::bail!("Received short HID response from Ledger");
@@ -392,6 +476,37 @@ impl TrezorTransport {
         Ok(address)
     }
 
+    fn sign_transaction(
+        hd_path: &str,
+        transaction: &[u8],
+        network_passphrase: &str,
+    ) -> Result<Vec<u8>> {
+        let mut trezor = Self::connect()?;
+        trezor
+            .init_device(None)
+            .context("Failed to initialize Trezor session")?;
+
+        let mut request = trezor_client::protos::StellarSignTx::new();
+        request.address_n = parse_hd_path(hd_path)?;
+        if !network_passphrase.is_empty() {
+            request.set_network(network_passphrase);
+        }
+        request.set_transaction(transaction);
+
+        let response = trezor.call(
+            request,
+            Box::new(|_, message: trezor_client::protos::StellarSignedTx| {
+                Ok(message.signature().to_vec())
+            }),
+        )?;
+        let signature = trezor_client::client::handle_interaction(response)
+            .context("Trezor did not return a transaction signature")?;
+        if signature.len() < 64 {
+            anyhow::bail!("Trezor signature response was too short");
+        }
+        Ok(signature)
+    }
+
     fn connect() -> Result<trezor_client::Trezor> {
         let mut devices = trezor_client::find_devices(false);
         match devices.len() {
@@ -480,6 +595,17 @@ mod tests {
         let signature = extract_signature_bytes(&response).unwrap();
         assert_eq!(signature.len(), 64);
         assert!(signature.iter().all(|byte| *byte == 9));
+    }
+
+    #[test]
+    fn map_signing_error_includes_recovery_guidance() {
+        let err = map_signing_error(
+            anyhow::anyhow!("Timed out waiting for Ledger response"),
+            HardwareWalletKind::Ledger,
+        );
+        let message = err.to_string().to_lowercase();
+        assert!(message.contains("recovery") || message.contains("retry"));
+        assert!(message.contains("timeout") || message.contains("ledger"));
     }
 
     #[cfg(feature = "hardware-wallet")]

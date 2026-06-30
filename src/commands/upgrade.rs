@@ -14,6 +14,9 @@ use std::path::PathBuf;
 pub enum UpgradeCommands {
     /// Prepare and validate a contract upgrade
     Prepare(PrepareArgs),
+    /// Automated compatibility checks, migration planning, and rollout helpers
+    #[command(subcommand)]
+    Auto(crate::commands::upgrade_auto::UpgradeAutoCommands),
     /// Create a governance proposal for a contract upgrade
     Propose(ProposeArgs),
     /// List pending upgrade proposals
@@ -272,6 +275,7 @@ fn short_id(id: &str) -> String {
 pub async fn handle(cmd: UpgradeCommands) -> Result<()> {
     match cmd {
         UpgradeCommands::Prepare(args) => handle_prepare(args).await,
+        UpgradeCommands::Auto(cmd) => crate::commands::upgrade_auto::handle(cmd).await,
         UpgradeCommands::Propose(args) => handle_propose(args),
         UpgradeCommands::List(args) => handle_list(args),
         UpgradeCommands::Status(args) => handle_list(args), // Alias for list

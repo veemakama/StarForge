@@ -9,6 +9,7 @@ use zip::write::FileOptions;
 use zip::ZipWriter;
 
 use crate::utils::config;
+use crate::utils::soroban::ContractInspectResult;
 use crate::utils::crypto::{decrypt_secret, encrypt_secret};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +43,8 @@ pub struct BackupRecord {
     pub status: BackupStatus,
     pub verified_at: Option<String>,
     pub replicated_regions: Vec<String>,
+    #[serde(default)]
+    pub contract_state: Option<ContractStateMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +55,59 @@ pub struct AutomationConfig {
     pub encrypt: bool,
     pub region: String,
     pub last_run: Option<String>,
+    #[serde(default)]
+    pub contract: Option<ContractScheduleConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractStateMetadata {
+    pub contract_id: String,
+    pub source_network: String,
+    pub latest_ledger: u32,
+    pub last_modified_ledger_seq: Option<u32>,
+    pub live_until_ledger_seq: Option<u32>,
+    pub entry_count: usize,
+    pub manifest_path: PathBuf,
+    #[serde(default)]
+    pub restore_history: Vec<CrossNetworkRestore>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractScheduleConfig {
+    pub contract_id: String,
+    pub network: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractStateManifest {
+    pub version: u32,
+    pub backup_id: Option<String>,
+    pub contract_id: String,
+    pub source_network: String,
+    pub captured_at: String,
+    pub latest_ledger: u32,
+    pub executable: String,
+    pub wasm_hash: Option<String>,
+    pub storage_durability: String,
+    pub last_modified_ledger_seq: Option<u32>,
+    pub live_until_ledger_seq: Option<u32>,
+    pub instance_storage: Vec<ContractStateEntry>,
+    pub checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractStateEntry {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossNetworkRestore {
+    pub restored_at: String,
+    pub target_network: String,
+    pub target_contract_id: Option<String>,
+    pub output_path: PathBuf,
+    pub verified: bool,
 }
 
 fn backups_dir() -> Result<PathBuf> {
@@ -178,6 +234,7 @@ pub fn create_backup(
         status: BackupStatus::Created,
         verified_at: None,
         replicated_regions: Vec::new(),
+        contract_state: None,
     };
 
     replicate(&mut record, region)?;
@@ -186,6 +243,171 @@ pub fn create_backup(
     records.push(record.clone());
     save_records(&records)?;
     Ok(record)
+}
+
+pub fn create_contract_state_backup(
+    inspect: &ContractInspectResult,
+    source_network: &str,
+    label: &str,
+    encrypt: bool,
+    passphrase: Option<&str>,
+    region: &str,
+) -> Result<BackupRecord> {
+    let manifest = build_contract_manifest(inspect, source_network);
+    let tmp = tempfile::tempdir()?;
+    let manifest_path = tmp
+        .path()
+        .join(format!("{}-state-manifest.json", inspect.contract_id));
+    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+
+    let mut record = create_backup(&[manifest_path.clone()], label, encrypt, passphrase, region)?;
+    let durable_manifest_path = backups_dir()?.join(format!("{}.contract-state.json", record.id));
+    let mut durable_manifest = manifest;
+    durable_manifest.backup_id = Some(record.id.clone());
+    durable_manifest.checksum = contract_manifest_checksum(&durable_manifest);
+    fs::write(
+        &durable_manifest_path,
+        serde_json::to_string_pretty(&durable_manifest)?,
+    )?;
+
+    record.contract_state = Some(ContractStateMetadata {
+        contract_id: inspect.contract_id.clone(),
+        source_network: source_network.to_string(),
+        latest_ledger: inspect.latest_ledger,
+        last_modified_ledger_seq: inspect.last_modified_ledger_seq,
+        live_until_ledger_seq: inspect.live_until_ledger_seq,
+        entry_count: inspect.instance_storage.len(),
+        manifest_path: durable_manifest_path,
+        restore_history: Vec::new(),
+    });
+
+    let mut records = list_backups()?;
+    if let Some(existing) = records.iter_mut().find(|r| r.id == record.id) {
+        *existing = record.clone();
+    }
+    save_records(&records)?;
+    Ok(record)
+}
+
+fn build_contract_manifest(
+    inspect: &ContractInspectResult,
+    source_network: &str,
+) -> ContractStateManifest {
+    let mut manifest = ContractStateManifest {
+        version: 1,
+        backup_id: None,
+        contract_id: inspect.contract_id.clone(),
+        source_network: source_network.to_string(),
+        captured_at: Utc::now().to_rfc3339(),
+        latest_ledger: inspect.latest_ledger,
+        executable: inspect.executable.clone(),
+        wasm_hash: inspect.wasm_hash.clone(),
+        storage_durability: inspect.storage_durability.clone(),
+        last_modified_ledger_seq: inspect.last_modified_ledger_seq,
+        live_until_ledger_seq: inspect.live_until_ledger_seq,
+        instance_storage: inspect
+            .instance_storage
+            .iter()
+            .map(|entry| ContractStateEntry {
+                key: entry.key.clone(),
+                value: entry.value.clone(),
+            })
+            .collect(),
+        checksum: String::new(),
+    };
+    manifest.checksum = contract_manifest_checksum(&manifest);
+    manifest
+}
+
+pub fn load_contract_manifest(id: &str) -> Result<ContractStateManifest> {
+    let record = load_backup(id)?;
+    let metadata = record
+        .contract_state
+        .ok_or_else(|| anyhow::anyhow!("Backup '{}' is not a contract state backup", record.id))?;
+    let raw = fs::read_to_string(&metadata.manifest_path).with_context(|| {
+        format!(
+            "Failed to read contract state manifest {}",
+            metadata.manifest_path.display()
+        )
+    })?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+pub fn verify_contract_state_backup(
+    id: &str,
+    passphrase: Option<&str>,
+) -> Result<ContractStateManifest> {
+    verify_backup(id, passphrase)?;
+    let manifest = load_contract_manifest(id)?;
+    let expected = contract_manifest_checksum(&manifest);
+    if manifest.checksum != expected {
+        anyhow::bail!(
+            "Contract state manifest checksum mismatch for backup '{}'",
+            id
+        );
+    }
+    Ok(manifest)
+}
+
+pub fn restore_contract_state_backup(
+    id: &str,
+    target_network: &str,
+    target_contract_id: Option<&str>,
+    output_dir: &Path,
+    passphrase: Option<&str>,
+) -> Result<CrossNetworkRestore> {
+    let manifest = verify_contract_state_backup(id, passphrase)?;
+    fs::create_dir_all(output_dir)?;
+
+    let output_path = output_dir.join(format!(
+        "{}-to-{}-restore-plan.json",
+        manifest.contract_id, target_network
+    ));
+    let restore_plan = serde_json::json!({
+        "version": 1,
+        "backup_id": id,
+        "source_network": manifest.source_network,
+        "source_contract_id": manifest.contract_id,
+        "target_network": target_network,
+        "target_contract_id": target_contract_id,
+        "latest_ledger": manifest.latest_ledger,
+        "wasm_hash": manifest.wasm_hash,
+        "storage_durability": manifest.storage_durability,
+        "entries": manifest.instance_storage,
+        "generated_at": Utc::now().to_rfc3339(),
+        "notes": [
+            "Review this plan before replaying state on the target network.",
+            "Soroban state writes must be applied by a migration contract or authorized admin invocation."
+        ]
+    });
+    fs::write(&output_path, serde_json::to_string_pretty(&restore_plan)?)?;
+
+    let restore = CrossNetworkRestore {
+        restored_at: Utc::now().to_rfc3339(),
+        target_network: target_network.to_string(),
+        target_contract_id: target_contract_id.map(str::to_string),
+        output_path,
+        verified: true,
+    };
+
+    let mut records = list_backups()?;
+    if let Some(record) = records
+        .iter_mut()
+        .find(|r| r.id == id || r.id.starts_with(id))
+    {
+        if let Some(metadata) = record.contract_state.as_mut() {
+            metadata.restore_history.push(restore.clone());
+        }
+    }
+    save_records(&records)?;
+    Ok(restore)
+}
+
+fn contract_manifest_checksum(manifest: &ContractStateManifest) -> String {
+    let mut clone = manifest.clone();
+    clone.checksum.clear();
+    let bytes = serde_json::to_vec(&clone).unwrap_or_default();
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn replicate(record: &mut BackupRecord, region: &str) -> Result<()> {
@@ -352,10 +574,47 @@ pub fn configure_automation(
         encrypt,
         region: region.to_string(),
         last_run: None,
+        contract: None,
     };
     configs.push(cfg.clone());
     save_automation(&configs)?;
     Ok(cfg)
+}
+
+pub fn configure_contract_automation(
+    label: &str,
+    contract_id: &str,
+    network: &str,
+    interval_hours: u64,
+    encrypt: bool,
+    region: &str,
+) -> Result<AutomationConfig> {
+    let mut configs = list_automation()?;
+    configs.retain(|c| c.label != label);
+    let cfg = AutomationConfig {
+        label: label.to_string(),
+        sources: Vec::new(),
+        interval_hours,
+        encrypt,
+        region: region.to_string(),
+        last_run: None,
+        contract: Some(ContractScheduleConfig {
+            contract_id: contract_id.to_string(),
+            network: network.to_string(),
+        }),
+    };
+    configs.push(cfg.clone());
+    save_automation(&configs)?;
+    Ok(cfg)
+}
+
+pub fn mark_automation_ran(label: &str, ran_at: DateTime<Utc>) -> Result<()> {
+    let mut configs = list_automation()?;
+    if let Some(cfg) = configs.iter_mut().find(|cfg| cfg.label == label) {
+        cfg.last_run = Some(ran_at.to_rfc3339());
+    }
+    save_automation(&configs)?;
+    Ok(())
 }
 
 /// Run any automated backup configs that are due. Returns labels backed up.
@@ -366,6 +625,9 @@ pub fn run_automation(passphrase: Option<&str>) -> Result<Vec<String>> {
     let now = Utc::now();
 
     for cfg in configs.iter_mut() {
+        if cfg.contract.is_some() {
+            continue;
+        }
         let due = match &cfg.last_run {
             None => true,
             Some(last) => DateTime::parse_from_rfc3339(last)

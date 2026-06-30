@@ -1,4 +1,4 @@
-use crate::utils::config;
+use crate::utils::{config, wallet_signer};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -348,7 +348,16 @@ pub async fn submit_payment_transaction(
     secret_key: &str,
     network: &str,
 ) -> Result<TransactionSubmitResult> {
-    let signed_xdr = sign_transaction_xdr(transaction_xdr, secret_key, network)?;
+    let request = wallet_signer::SigningRequest::local_secret(secret_key.to_string(), network);
+    submit_payment_with_signing(transaction_xdr, &request, network).await
+}
+
+pub async fn submit_payment_with_signing(
+    transaction_xdr: &str,
+    request: &wallet_signer::SigningRequest,
+    network: &str,
+) -> Result<TransactionSubmitResult> {
+    let signed_xdr = wallet_signer::sign_transaction_xdr(transaction_xdr, request)?;
 
     let horizon = horizon_url(network)?;
     let url = format!("{}/transactions", horizon);
@@ -530,12 +539,4 @@ fn build_payment_transaction_xdr(
 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(mock_xdr))
-}
-
-fn sign_transaction_xdr(transaction_xdr: &str, secret_key: &str, network: &str) -> Result<String> {
-    let _network_passphrase = config::get_network_passphrase(network);
-
-    let signed_mock = format!("signed_{}_with_{}", transaction_xdr, &secret_key[..8]);
-    use base64::{engine::general_purpose, Engine as _};
-    Ok(general_purpose::STANDARD.encode(signed_mock))
 }

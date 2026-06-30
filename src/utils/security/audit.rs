@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::path::Path;
 use std::process::Command;
 
@@ -31,7 +32,11 @@ pub struct AuditResult {
     pub score: f64,
     pub findings: Vec<VulnerabilityFinding>,
     pub tools_used: Vec<String>,
+    #[serde(default)]
+    pub tool_statuses: Vec<AuditToolStatus>,
     pub summary: AuditSummary,
+    #[serde(default)]
+    pub ci_passed: bool,
 }
 
 pub struct AuditConfig {
@@ -39,36 +44,61 @@ pub struct AuditConfig {
     pub run_mythril: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditToolStatus {
+    pub tool: String,
+    pub available: bool,
+    pub executed: bool,
+    pub status: String,
+    pub command: Option<String>,
+    pub findings: u32,
+    pub message: Option<String>,
+}
+
 pub fn run_audit(path: &Path, config: &AuditConfig) -> Result<AuditResult> {
     let mut findings = Vec::new();
     let mut tools_used = Vec::new();
+    let mut tool_statuses = Vec::new();
 
     let builtin = run_builtin_analysis(path)?;
+    let builtin_count = builtin.len() as u32;
     findings.extend(builtin);
     tools_used.push("starforge-builtin".to_string());
+    tool_statuses.push(AuditToolStatus {
+        tool: "starforge-builtin".to_string(),
+        available: true,
+        executed: true,
+        status: "completed".to_string(),
+        command: None,
+        findings: builtin_count,
+        message: Some("Built-in Soroban heuristics completed".to_string()),
+    });
 
-    if config.run_slither && is_tool_available("slither") {
-        match run_slither(path) {
-            Ok(mut sf) => {
-                findings.append(&mut sf);
-                tools_used.push("slither".to_string());
-            }
-            Err(e) => eprintln!("Warning: Slither failed: {}", e),
-        }
-    }
+    collect_external_tool(
+        "slither",
+        &["STARFORGE_SLITHER_CMD"],
+        config.run_slither,
+        path,
+        run_slither,
+        &mut findings,
+        &mut tools_used,
+        &mut tool_statuses,
+    );
 
-    if config.run_mythril && is_tool_available("myth") {
-        match run_mythril(path) {
-            Ok(mut mf) => {
-                findings.append(&mut mf);
-                tools_used.push("mythril".to_string());
-            }
-            Err(e) => eprintln!("Warning: Mythril failed: {}", e),
-        }
-    }
+    collect_external_tool(
+        "mythril",
+        &["STARFORGE_MYTHRIL_CMD", "STARFORGE_MYTH_CMD"],
+        config.run_mythril,
+        path,
+        run_mythril,
+        &mut findings,
+        &mut tools_used,
+        &mut tool_statuses,
+    );
 
     let summary = compute_summary(&findings);
     let score = compute_score(&summary);
+    let ci_passed = score >= 80.0 && summary.critical == 0;
 
     Ok(AuditResult {
         timestamp: Utc::now().to_rfc3339(),
@@ -76,27 +106,129 @@ pub fn run_audit(path: &Path, config: &AuditConfig) -> Result<AuditResult> {
         score,
         findings,
         tools_used,
+        tool_statuses,
         summary,
+        ci_passed,
     })
 }
 
+fn collect_external_tool(
+    tool: &str,
+    env_vars: &[&str],
+    enabled: bool,
+    path: &Path,
+    runner: fn(&Path, &str) -> Result<Vec<VulnerabilityFinding>>,
+    findings: &mut Vec<VulnerabilityFinding>,
+    tools_used: &mut Vec<String>,
+    tool_statuses: &mut Vec<AuditToolStatus>,
+) {
+    if !enabled {
+        tool_statuses.push(skipped_tool_status(tool, "Disabled by audit configuration"));
+        return;
+    }
+
+    let Some(command) = resolve_tool(default_command_for(tool), env_vars) else {
+        tool_statuses.push(skipped_tool_status(
+            tool,
+            &format!(
+                "{} not found. Install it or configure {}.",
+                tool,
+                env_vars.join("/")
+            ),
+        ));
+        return;
+    };
+
+    match runner(path, &command) {
+        Ok(mut tool_findings) => {
+            let count = tool_findings.len() as u32;
+            findings.append(&mut tool_findings);
+            tools_used.push(tool.to_string());
+            tool_statuses.push(AuditToolStatus {
+                tool: tool.to_string(),
+                available: true,
+                executed: true,
+                status: "completed".to_string(),
+                command: Some(command),
+                findings: count,
+                message: None,
+            });
+        }
+        Err(err) => {
+            tool_statuses.push(AuditToolStatus {
+                tool: tool.to_string(),
+                available: true,
+                executed: true,
+                status: "failed".to_string(),
+                command: Some(command),
+                findings: 0,
+                message: Some(err.to_string()),
+            });
+        }
+    }
+}
+
+fn default_command_for(tool: &str) -> &str {
+    match tool {
+        "mythril" => "myth",
+        other => other,
+    }
+}
+
+fn skipped_tool_status(tool: &str, message: &str) -> AuditToolStatus {
+    AuditToolStatus {
+        tool: tool.to_string(),
+        available: false,
+        executed: false,
+        status: "skipped".to_string(),
+        command: None,
+        findings: 0,
+        message: Some(message.to_string()),
+    }
+}
+
+fn resolve_tool(default_command: &str, env_vars: &[&str]) -> Option<String> {
+    for env_var in env_vars {
+        if let Ok(command) = env::var(env_var) {
+            let command = command.trim();
+            if !command.is_empty() {
+                return Some(command.to_string());
+            }
+        }
+    }
+
+    if is_tool_available(default_command) {
+        Some(default_command.to_string())
+    } else {
+        None
+    }
+}
+
 fn is_tool_available(tool: &str) -> bool {
-    Command::new("which")
+    let probe = if cfg!(windows) { "where" } else { "which" };
+    Command::new(probe)
         .arg(tool)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-fn run_slither(path: &Path) -> Result<Vec<VulnerabilityFinding>> {
-    let output = Command::new("slither")
+fn run_slither(path: &Path, command: &str) -> Result<Vec<VulnerabilityFinding>> {
+    let output = Command::new(command)
         .arg(path)
         .arg("--json")
         .arg("-")
         .output()?;
 
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    parse_slither_output(&json_str)
+    if !output.status.success() {
+        anyhow::bail!(
+            "Slither exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    parse_slither_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn parse_slither_output(json_str: &str) -> Result<Vec<VulnerabilityFinding>> {
@@ -166,30 +298,37 @@ fn parse_slither_output(json_str: &str) -> Result<Vec<VulnerabilityFinding>> {
 fn slither_remediation(check: &str) -> String {
     match check {
         "reentrancy-eth" | "reentrancy-no-eth" => {
-            "Use the checks-effects-interactions pattern or a reentrancy guard.".to_string()
+            "Use checks-effects-interactions or add a reentrancy guard.".to_string()
         }
         "uninitialized-state" | "uninitialized-storage" => {
-            "Initialize all state variables before use.".to_string()
+            "Initialize all state before it is read.".to_string()
         }
         "integer-overflow" | "integer-underflow" => {
-            "Use checked arithmetic operations.".to_string()
+            "Use checked arithmetic operations for amount and counter math.".to_string()
         }
-        "arbitrary-send-eth" => "Validate the recipient address before sending funds.".to_string(),
-        "suicidal" => "Remove or restrict access to self-destruct functionality.".to_string(),
+        "arbitrary-send-eth" => "Validate the recipient before transferring funds.".to_string(),
+        "suicidal" => "Remove or strictly restrict destructive operations.".to_string(),
         _ => format!("Review and fix the '{}' vulnerability pattern.", check),
     }
 }
 
-fn run_mythril(path: &Path) -> Result<Vec<VulnerabilityFinding>> {
-    let output = Command::new("myth")
+fn run_mythril(path: &Path, command: &str) -> Result<Vec<VulnerabilityFinding>> {
+    let output = Command::new(command)
         .arg("analyze")
         .arg(path)
         .arg("--output")
         .arg("json")
         .output()?;
 
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    parse_mythril_output(&json_str)
+    if !output.status.success() {
+        anyhow::bail!(
+            "Mythril exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    parse_mythril_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn parse_mythril_output(json_str: &str) -> Result<Vec<VulnerabilityFinding>> {
@@ -241,10 +380,23 @@ fn parse_mythril_output(json_str: &str) -> Result<Vec<VulnerabilityFinding>> {
             description,
             location,
             tool: "mythril".to_string(),
-            remediation: "Review the Mythril finding and apply the recommended fix.".to_string(),
+            remediation: mythril_remediation(&issue.title),
         });
     }
     Ok(findings)
+}
+
+fn mythril_remediation(title: &str) -> String {
+    let lower = title.to_ascii_lowercase();
+    if lower.contains("reentrancy") {
+        "Move state updates before external calls and add explicit authorization.".to_string()
+    } else if lower.contains("overflow") || lower.contains("underflow") {
+        "Use checked or saturating arithmetic for amount and counter updates.".to_string()
+    } else if lower.contains("access") || lower.contains("authorization") {
+        "Require the expected signer or admin before privileged logic.".to_string()
+    } else {
+        "Review the Mythril finding and apply the recommended fix.".to_string()
+    }
 }
 
 fn run_builtin_analysis(path: &Path) -> Result<Vec<VulnerabilityFinding>> {
@@ -256,7 +408,7 @@ fn run_builtin_analysis(path: &Path) -> Result<Vec<VulnerabilityFinding>> {
             findings.push(VulnerabilityFinding {
                 id: format!("SF-{}", item.id.to_uppercase()),
                 title: item.title.clone(),
-                severity: item.severity.clone(),
+                severity: normalize_severity(&item.severity).to_string(),
                 description: item.description.clone(),
                 location: Some(path.to_string_lossy().to_string()),
                 tool: "starforge-builtin".to_string(),
@@ -269,20 +421,32 @@ fn run_builtin_analysis(path: &Path) -> Result<Vec<VulnerabilityFinding>> {
 
 fn builtin_remediation(id: &str) -> String {
     match id {
-        "auth_check" => {
-            "Add authorization checks using require_auth() before sensitive operations.".to_string()
+        "auth_check" | "auth-missing" => {
+            "Add require_auth() before sensitive state changes.".to_string()
         }
-        "overflow" => {
-            "Use checked arithmetic operations (checked_add, checked_sub, etc.).".to_string()
+        "overflow" | "unchecked-arithmetic" => {
+            "Use checked_add, checked_sub, checked_mul, or saturating operations.".to_string()
         }
-        "panic" => {
-            "Replace expect()/unwrap() with proper error handling using Result<T, E>.".to_string()
+        "panic" | "unsafe-unwrap" => {
+            "Replace unwrap/expect with explicit Result or fallback handling.".to_string()
         }
-        "reentrancy" => {
-            "Avoid calling external contracts mid-function; emit events after state changes."
-                .to_string()
+        "reentrancy" | "reentrancy-risk" => {
+            "Avoid external calls before state changes and emit events after mutations.".to_string()
+        }
+        "no-upgrade-guard" => {
+            "Require admin or governance authorization before upgrade operations.".to_string()
         }
         _ => format!("Review and fix the '{}' security pattern.", id),
+    }
+}
+
+fn normalize_severity(severity: &str) -> &'static str {
+    match severity.to_ascii_lowercase().as_str() {
+        "critical" => "critical",
+        "high" => "high",
+        "medium" | "warning" => "medium",
+        "low" => "low",
+        _ => "info",
     }
 }
 
@@ -295,7 +459,7 @@ fn compute_summary(findings: &[VulnerabilityFinding]) -> AuditSummary {
         info: 0,
     };
     for f in findings {
-        match f.severity.as_str() {
+        match normalize_severity(&f.severity) {
             "critical" => s.critical += 1,
             "high" => s.high += 1,
             "medium" => s.medium += 1,
@@ -323,11 +487,13 @@ pub fn format_report(result: &AuditResult) -> String {
          Contract : {}\n\
          Timestamp: {}\n\
          Tools    : {}\n\
-         Score    : {:.1}/100\n\n",
+         Score    : {:.1}/100\n\
+         CI ready : {}\n\n",
         result.contract_path,
         result.timestamp,
         result.tools_used.join(", "),
         result.score,
+        if result.ci_passed { "yes" } else { "no" },
     ));
     out.push_str(&format!(
         "Summary\n\
@@ -343,6 +509,19 @@ pub fn format_report(result: &AuditResult) -> String {
         result.summary.low,
         result.summary.info,
     ));
+    out.push_str("Tool Status\n-----------\n");
+    for tool in &result.tool_statuses {
+        out.push_str(&format!(
+            "- {}: {} (available: {}, findings: {})",
+            tool.tool, tool.status, tool.available, tool.findings
+        ));
+        if let Some(message) = &tool.message {
+            out.push_str(&format!(" - {}", message));
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+
     if result.findings.is_empty() {
         out.push_str("No issues found.\n");
     } else {
@@ -364,6 +543,98 @@ pub fn format_report(result: &AuditResult) -> String {
         }
     }
     out
+}
+
+pub fn format_html_report(result: &AuditResult) -> String {
+    let rows = result
+        .findings
+        .iter()
+        .map(|finding| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&finding.severity),
+                html_escape(&finding.tool),
+                html_escape(&finding.title),
+                html_escape(finding.location.as_deref().unwrap_or("")),
+                html_escape(&finding.remediation)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let tool_rows = result
+        .tool_statuses
+        .iter()
+        .map(|tool| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&tool.tool),
+                html_escape(&tool.status),
+                tool.findings,
+                html_escape(tool.message.as_deref().unwrap_or(""))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Security Audit Report</title></head>
+<body>
+<h1>Security Audit Report</h1>
+<p><strong>Contract:</strong> {}</p>
+<p><strong>Score:</strong> {:.1}/100</p>
+<p><strong>Generated:</strong> {}</p>
+<h2>Tool Status</h2>
+<table border="1"><tr><th>Tool</th><th>Status</th><th>Findings</th><th>Message</th></tr>{}</table>
+<h2>Findings</h2>
+<table border="1"><tr><th>Severity</th><th>Tool</th><th>Title</th><th>Location</th><th>Remediation</th></tr>{}</table>
+</body>
+</html>"#,
+        html_escape(&result.contract_path),
+        result.score,
+        html_escape(&result.timestamp),
+        tool_rows,
+        rows
+    )
+}
+
+pub fn generate_github_actions_workflow(contract_path: &Path, min_score: f64) -> String {
+    format!(
+        r#"name: StarForge Security Audit
+
+on:
+  pull_request:
+  push:
+    branches: [ master, main ]
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install optional audit tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install slither-analyzer mythril || true
+      - name: Build StarForge
+        run: cargo build --locked
+      - name: Run contract security audit
+        run: cargo run -- security audit {} --format json --min-score {:.1} --ci
+"#,
+        contract_path.display(),
+        min_score
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -409,7 +680,7 @@ mod tests {
             VulnerabilityFinding {
                 id: "y".to_string(),
                 title: "t2".to_string(),
-                severity: "low".to_string(),
+                severity: "warning".to_string(),
                 description: "d2".to_string(),
                 location: None,
                 tool: "builtin".to_string(),
@@ -418,7 +689,57 @@ mod tests {
         ];
         let s = compute_summary(&findings);
         assert_eq!(s.high, 1);
-        assert_eq!(s.low, 1);
-        assert_eq!(s.critical + s.medium + s.info, 0);
+        assert_eq!(s.medium, 1);
+        assert_eq!(s.critical + s.low + s.info, 0);
+    }
+
+    #[test]
+    fn parses_slither_json() {
+        let raw = r#"{
+          "results": {
+            "detectors": [{
+              "check": "reentrancy-no-eth",
+              "impact": "High",
+              "description": "External call before state update",
+              "elements": [{
+                "source_mapping": {
+                  "filename_used": "src/lib.rs",
+                  "lines": [10, 11]
+                }
+              }]
+            }]
+          }
+        }"#;
+
+        let findings = parse_slither_output(raw).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, "high");
+        assert!(findings[0].remediation.contains("reentrancy"));
+    }
+
+    #[test]
+    fn parses_mythril_json() {
+        let raw = r#"{
+          "issues": [{
+            "title": "Integer Overflow",
+            "severity": "Medium",
+            "description": { "head": "Overflow possible", "tail": "on addition" },
+            "filename": "src/lib.rs",
+            "lineno": 42
+          }]
+        }"#;
+
+        let findings = parse_mythril_output(raw).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].tool, "mythril");
+        assert_eq!(findings[0].location.as_deref(), Some("src/lib.rs:42"));
+    }
+
+    #[test]
+    fn generated_ci_workflow_runs_security_audit() {
+        let workflow =
+            generate_github_actions_workflow(Path::new("contracts/token/src/lib.rs"), 85.0);
+        assert!(workflow.contains("security audit contracts/token/src/lib.rs"));
+        assert!(workflow.contains("--min-score 85.0"));
     }
 }
