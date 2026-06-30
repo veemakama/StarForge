@@ -132,6 +132,9 @@ enum Commands {
     #[command(subcommand)]
     Security(commands::security::SecurityCommands),
 
+    /// Run a comprehensive security audit on a Soroban contract
+    Audit(commands::audit::AuditArgs),
+
     /// Schedule deployments for future execution with approval workflows
     #[command(subcommand)]
     Schedule(commands::schedule::ScheduleCommands),
@@ -218,6 +221,7 @@ async fn main() {
         Commands::Upgrade(_) => "upgrade",
         Commands::Orchestrate(_) => "orchestrate",
         Commands::Security(_) => "security",
+        Commands::Audit(_) => "audit",
         Commands::Schedule(_) => "schedule",
         Commands::Simulate(_) => "simulate",
         Commands::Backup(_) => "backup",
@@ -261,6 +265,7 @@ async fn main() {
         Commands::Upgrade(cmd) => commands::upgrade::handle(cmd).await,
         Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd).await,
         Commands::Security(cmd) => commands::security::handle(cmd).await,
+        Commands::Audit(args) => commands::audit::handle(args).await,
         Commands::Schedule(cmd) => commands::schedule::handle(cmd).await,
         Commands::Simulate(cmd) => commands::simulate::handle(cmd).await,
         Commands::Backup(cmd) => commands::backup::handle(cmd).await,
