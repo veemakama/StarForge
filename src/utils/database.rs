@@ -240,6 +240,10 @@ impl Database {
             .conn
             .query_row("SELECT COUNT(*) FROM config_kv", [], |r| r.get(0))
             .unwrap_or(0);
+        let events_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+            .unwrap_or(0);
         let schema_version = self
             .get_meta("schema_version")?
             .unwrap_or_else(|| "unknown".to_string());
@@ -248,9 +252,183 @@ impl Database {
             wallets: wallets as usize,
             networks: networks as usize,
             config_entries: config_entries as usize,
+            events: events_count as usize,
             schema_version,
             db_size_bytes: db_size,
         })
+    }
+
+    pub fn insert_event(&self, event: &EventRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO events \
+             (id, event_type, contract_id, ledger, topics, value, timestamp, network) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.id,
+                event.event_type,
+                event.contract_id,
+                event.ledger,
+                event.topics,
+                event.value,
+                event.timestamp,
+                event.network,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_events(&self, filters: &EventSearchFilters) -> Result<Vec<EventRow>> {
+        let mut conditions = vec!["1=1".to_string()];
+        let mut params = Vec::new();
+
+        if let Some(ref contract_id) = filters.contract_id {
+            conditions.push("contract_id = ?".to_string());
+            params.push(contract_id.clone());
+        }
+        if let Some(ref event_type) = filters.event_type {
+            conditions.push("event_type = ?".to_string());
+            params.push(event_type.clone());
+        }
+        if let Some(min_ledger) = filters.min_ledger {
+            conditions.push("ledger >= ?".to_string());
+            params.push(min_ledger.to_string());
+        }
+        if let Some(max_ledger) = filters.max_ledger {
+            conditions.push("ledger <= ?".to_string());
+            params.push(max_ledger.to_string());
+        }
+        if let Some(ref start_time) = filters.start_time {
+            conditions.push("timestamp >= ?".to_string());
+            params.push(start_time.clone());
+        }
+        if let Some(ref end_time) = filters.end_time {
+            conditions.push("timestamp <= ?".to_string());
+            params.push(end_time.clone());
+        }
+        if let Some(ref network) = filters.network {
+            conditions.push("network = ?".to_string());
+            params.push(network.clone());
+        }
+
+        let limit = filters.limit.unwrap_or(100).to_string();
+        let offset = filters.offset.unwrap_or(0).to_string();
+
+        let sql = format!(
+            "SELECT id, event_type, contract_id, ledger, topics, value, timestamp, network \
+             FROM events \
+             WHERE {} \
+             ORDER BY timestamp DESC \
+             LIMIT {} OFFSET {}",
+            conditions.join(" AND "),
+            limit,
+            offset
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(EventRow {
+                id: row.get(0)?,
+                event_type: row.get(1)?,
+                contract_id: row.get(2)?,
+                ledger: row.get(3)?,
+                topics: row.get(4)?,
+                value: row.get(5)?,
+                timestamp: row.get(6)?,
+                network: row.get(7)?,
+            })
+        })?;
+
+        rows.map(|r| r.map_err(anyhow::Error::from)).collect()
+    }
+
+    pub fn aggregate_events(&self, bucket: &AggregationBucket, filters: &EventSearchFilters) -> Result<Vec<EventAggregation>> {
+        let bucket_sql = match bucket {
+            AggregationBucket::Hour => "strftime('%Y-%m-%d %H:00:00', timestamp) AS bucket",
+            AggregationBucket::Day => "strftime('%Y-%m-%d', timestamp) AS bucket",
+            AggregationBucket::Week => "strftime('%Y-%W', timestamp) AS bucket",
+            AggregationBucket::Month => "strftime('%Y-%m', timestamp) AS bucket",
+        };
+
+        let mut conditions = vec!["1=1".to_string()];
+        let mut params = Vec::new();
+
+        if let Some(ref contract_id) = filters.contract_id {
+            conditions.push("contract_id = ?".to_string());
+            params.push(contract_id.clone());
+        }
+        if let Some(ref event_type) = filters.event_type {
+            conditions.push("event_type = ?".to_string());
+            params.push(event_type.clone());
+        }
+        if let Some(min_ledger) = filters.min_ledger {
+            conditions.push("ledger >= ?".to_string());
+            params.push(min_ledger.to_string());
+        }
+        if let Some(max_ledger) = filters.max_ledger {
+            conditions.push("ledger <= ?".to_string());
+            params.push(max_ledger.to_string());
+        }
+        if let Some(ref start_time) = filters.start_time {
+            conditions.push("timestamp >= ?".to_string());
+            params.push(start_time.clone());
+        }
+        if let Some(ref end_time) = filters.end_time {
+            conditions.push("timestamp <= ?".to_string());
+            params.push(end_time.clone());
+        }
+        if let Some(ref network) = filters.network {
+            conditions.push("network = ?".to_string());
+            params.push(network.clone());
+        }
+
+        let sql = format!(
+            "SELECT {}, COUNT(*) AS count \
+             FROM events \
+             WHERE {} \
+             GROUP BY bucket \
+             ORDER BY bucket DESC",
+            bucket_sql,
+            conditions.join(" AND ")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(EventAggregation {
+                bucket: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?;
+
+        rows.map(|r| r.map_err(anyhow::Error::from)).collect()
+    }
+
+    pub fn export_events(&self, filters: &EventSearchFilters, format: ExportFormat, writer: &mut impl std::io::Write) -> Result<()> {
+        let events = self.search_events(filters)?;
+
+        match format {
+            ExportFormat::Json => {
+                serde_json::to_writer_pretty(writer, &events)?;
+            }
+            ExportFormat::Csv => {
+                let mut wtr = csv::Writer::from_writer(writer);
+                wtr.write_record(&["id", "event_type", "contract_id", "ledger", "topics", "value", "timestamp", "network"])?;
+                for event in events {
+                    wtr.write_record(&[
+                        &event.id,
+                        &event.event_type,
+                        &event.contract_id,
+                        &event.ledger.to_string(),
+                        &event.topics.unwrap_or_default(),
+                        &event.value,
+                        &event.timestamp,
+                        &event.network,
+                    ])?;
+                }
+                wtr.flush()?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -413,6 +591,23 @@ CREATE TABLE IF NOT EXISTS templates (
     cached_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    contract_id TEXT NOT NULL,
+    ledger INTEGER NOT NULL,
+    topics TEXT,
+    value TEXT NOT NULL,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    network TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_contract ON events(contract_id);
+CREATE INDEX IF NOT EXISTS idx_events_ledger ON events(ledger);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_network ON events(network);
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_contract_ledger ON events(contract_id, ledger);
 CREATE INDEX IF NOT EXISTS idx_wallets_network ON wallets(network);
 CREATE INDEX IF NOT EXISTS idx_config_kv_key   ON config_kv(key);
 ";
@@ -447,6 +642,7 @@ pub struct DbStats {
     pub wallets: usize,
     pub networks: usize,
     pub config_entries: usize,
+    pub events: usize,
     pub schema_version: String,
     pub db_size_bytes: u64,
 }
@@ -456,6 +652,51 @@ pub struct MigrationReport {
     pub wallets_migrated: usize,
     pub networks_migrated: usize,
     pub config_keys_migrated: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventRow {
+    pub id: String,
+    pub event_type: String,
+    pub contract_id: String,
+    pub ledger: u32,
+    pub topics: Option<String>,
+    pub value: String,
+    pub timestamp: String,
+    pub network: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EventSearchFilters {
+    pub contract_id: Option<String>,
+    pub event_type: Option<String>,
+    pub min_ledger: Option<u32>,
+    pub max_ledger: Option<u32>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub network: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AggregationBucket {
+    Hour,
+    Day,
+    Week,
+    Month,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventAggregation {
+    pub bucket: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExportFormat {
+    Json,
+    Csv,
 }
 
 #[cfg(test)]
@@ -535,5 +776,60 @@ mod tests {
         let removed = db.delete_wallet("temp").unwrap();
         assert_eq!(removed, 1);
         assert!(db.get_wallet("temp").unwrap().is_none());
+    }
+
+    #[test]
+    fn insert_and_search_event() {
+        let db = in_memory_db();
+        let event = EventRow {
+            id: "evt123".to_string(),
+            event_type: "contract".to_string(),
+            contract_id: "CABC123".to_string(),
+            ledger: 12345,
+            topics: Some(serde_json::to_string(&vec!["topic1", "topic2"]).unwrap()),
+            value: serde_json::json!({"key": "value"}).to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            network: "testnet".to_string(),
+        };
+        db.insert_event(&event).unwrap();
+        
+        let filters = EventSearchFilters {
+            contract_id: Some("CABC123".to_string()),
+            ..Default::default()
+        };
+        let events = db.search_events(&filters).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, "evt123");
+    }
+
+    #[test]
+    fn aggregate_events() {
+        let db = in_memory_db();
+        let event1 = EventRow {
+            id: "evt1".to_string(),
+            event_type: "contract".to_string(),
+            contract_id: "CABC".to_string(),
+            ledger: 1,
+            topics: None,
+            value: "{}".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            network: "testnet".to_string(),
+        };
+        let event2 = EventRow {
+            id: "evt2".to_string(),
+            event_type: "contract".to_string(),
+            contract_id: "CABC".to_string(),
+            ledger: 2,
+            topics: None,
+            value: "{}".to_string(),
+            timestamp: "2024-01-01T01:00:00Z".to_string(),
+            network: "testnet".to_string(),
+        };
+        db.insert_event(&event1).unwrap();
+        db.insert_event(&event2).unwrap();
+
+        let aggregates = db.aggregate_events(&AggregationBucket::Hour, &EventSearchFilters::default()).unwrap();
+        assert_eq!(aggregates.len(), 1);
+        assert_eq!(aggregates[0].count, 2);
     }
 }

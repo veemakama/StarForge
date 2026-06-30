@@ -101,6 +101,20 @@ fn deploy_help_documents_flags() {
 }
 
 #[test]
+fn upgrade_auto_help_lists_compatibility_commands() {
+    let home = isolated_home();
+    let output = starforge(home.path())
+        .args(["upgrade", "auto", "--help"])
+        .output()
+        .expect("spawn upgrade auto help");
+    assert_success(&output, "starforge upgrade auto --help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("compat"));
+    assert!(stdout.contains("plan"));
+    assert!(stdout.contains("migration"));
+}
+
+#[test]
 fn network_add_custom_succeeds() {
     let home = isolated_home();
     let net_name = format!(
