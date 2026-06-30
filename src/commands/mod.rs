@@ -22,6 +22,7 @@ pub mod new;
 pub mod node;
 pub mod orchestrate;
 pub mod perf;
+pub mod pipeline_builder;
 pub mod plugin;
 pub mod registry;
 pub mod schedule;

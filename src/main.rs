@@ -125,6 +125,10 @@ enum Commands {
     #[command(subcommand)]
     Orchestrate(commands::orchestrate::OrchestrateCommands),
 
+    /// Visual pipeline builder for contract deployment workflows
+    #[command(subcommand)]
+    Pipeline(commands::pipeline_builder::PipelineCommands),
+
     /// Security hardening, validation, and monitoring
     #[command(subcommand)]
     Security(commands::security::SecurityCommands),
@@ -205,6 +209,7 @@ async fn main() {
         Commands::Registry(_) => "registry",
         Commands::Upgrade(_) => "upgrade",
         Commands::Orchestrate(_) => "orchestrate",
+        Commands::Pipeline(_) => "pipeline",
         Commands::Security(_) => "security",
         Commands::Schedule(_) => "schedule",
         Commands::Backup(_) => "backup",
@@ -245,6 +250,7 @@ async fn main() {
         Commands::Registry(cmd) => commands::registry::handle(cmd).await,
         Commands::Upgrade(cmd) => commands::upgrade::handle(cmd).await,
         Commands::Orchestrate(cmd) => commands::orchestrate::handle(cmd).await,
+        Commands::Pipeline(cmd) => commands::pipeline_builder::handle(cmd).await,
         Commands::Security(cmd) => commands::security::handle(cmd).await,
         Commands::Schedule(cmd) => commands::schedule::handle(cmd).await,
         Commands::Backup(cmd) => commands::backup::handle(cmd).await,

@@ -21,6 +21,7 @@ pub mod node;
 pub mod notifications;
 pub mod optimizer;
 pub mod performance;
+pub mod pipeline_builder;
 pub mod print;
 pub mod profiler;
 pub mod registry;
