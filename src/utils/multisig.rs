@@ -255,15 +255,19 @@ pub fn sign_transaction_partial(
     secret_key: &str,
     network: &str,
 ) -> Result<String> {
-    // This is a simplified mock implementation
-    // In production, use stellar-xdr and ed25519 signing
+    let request = crate::utils::wallet_signer::SigningRequest::local_secret(
+        secret_key.to_string(),
+        network,
+    );
+    crate::utils::wallet_signer::sign_transaction_partial(transaction_xdr, &request, "local")
+}
 
-    let _network_passphrase = config::get_network_passphrase(network);
-
-    // Mock signing
-    let signature = format!("sig_{}_{}", &secret_key[..8], &transaction_xdr[..16]);
-    use base64::{engine::general_purpose, Engine as _};
-    Ok(general_purpose::STANDARD.encode(signature))
+pub fn sign_transaction_partial_with_request(
+    transaction_xdr: &str,
+    request: &crate::utils::wallet_signer::SigningRequest,
+    signer_label: &str,
+) -> Result<String> {
+    crate::utils::wallet_signer::sign_transaction_partial(transaction_xdr, request, signer_label)
 }
 
 pub fn combine_signatures(transaction_xdr: &str, signatures: &[Signature]) -> Result<String> {

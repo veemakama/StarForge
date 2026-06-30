@@ -1,15 +1,21 @@
-use crate::utils::config;
+use crate::utils::{config, wallet_signer};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
 
-static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+fn build_http_client(timeout: Duration) -> Result<Client> {
     Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(timeout)
+        .pool_max_idle_per_host(10)
         .build()
-        .expect("Failed to create HTTP client")
+        .context("Failed to create Horizon HTTP client")
+}
+
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    build_http_client(Duration::from_secs(30))
+        .expect("Failed to create shared Horizon HTTP client")
 });
 
 pub fn network_config(network: &str) -> Result<config::NetworkConfig> {
@@ -47,6 +53,34 @@ pub async fn fund_account(public_key: &str, network: &str) -> Result<()> {
         friendbot_url(network)?.unwrap_or_else(|| "https://friendbot.stellar.org".to_string());
     let separator = if friendbot.contains('?') { '&' } else { '?' };
     let url = format!("{}{}addr={}", friendbot, separator, public_key);
+    let res = match ureq::get(&url).call() {
+        Ok(res) => res,
+        Err(ureq::Error::Status(400, _)) => {
+            anyhow::bail!(
+                "Friendbot rejected the funding request for '{}'.\n\
+                 This usually means the account has already been funded on {}.\n\
+                 Check the balance: starforge wallet show",
+                public_key,
+                network
+            )
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            anyhow::bail!(
+                "Friendbot returned HTTP {} for network '{}'.\n\
+                 Friendbot is only available on testnet — verify your active network: starforge network show",
+                status,
+                network
+            )
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Could not reach Friendbot on '{}'. Check your internet connection.",
+                    network
+                )
+            })
+        }
+    };
     let res = HTTP_CLIENT
         .get(&url)
         .send()
@@ -55,13 +89,30 @@ pub async fn fund_account(public_key: &str, network: &str) -> Result<()> {
     if res.status() == 200 {
         Ok(())
     } else {
-        anyhow::bail!("Friendbot returned status {}", res.status())
+        anyhow::bail!(
+            "Friendbot returned HTTP {} for network '{}'.\n\
+             Friendbot is only available on testnet — verify your active network: starforge network show",
+            res.status(),
+            network
+        )
     }
 }
 
 pub async fn fetch_account(public_key: &str, network: &str) -> Result<AccountResponse> {
     let horizon = horizon_url(network)?;
     let url = format!("{}/accounts/{}", horizon, public_key);
+    let res = ureq::get(&url)
+        .call()
+        .with_context(|| {
+            format!(
+                "Could not reach Horizon on '{}'. Check your internet connection or run: starforge network test",
+                network
+            )
+        })?;
+    if res.status() == 200 {
+        let account: AccountResponse = res
+            .into_json()
+            .with_context(|| "Failed to parse account response from Horizon")?;
     let res = HTTP_CLIENT
         .get(&url)
         .send()
@@ -73,8 +124,21 @@ pub async fn fetch_account(public_key: &str, network: &str) -> Result<AccountRes
             .await
             .with_context(|| "Failed to parse account response")?;
         Ok(account)
+    } else if res.status() == 404 {
+        anyhow::bail!(
+            "Account '{}' not found on {}.\n\
+             The account may not have been activated yet.\n\
+             Fund it with: starforge wallet fund",
+            public_key,
+            network
+        )
     } else {
-        anyhow::bail!("Account not found on {}", network)
+        anyhow::bail!(
+            "Horizon returned HTTP {} for account '{}' on {}",
+            res.status(),
+            public_key,
+            network
+        )
     }
 }
 
@@ -348,7 +412,16 @@ pub async fn submit_payment_transaction(
     secret_key: &str,
     network: &str,
 ) -> Result<TransactionSubmitResult> {
-    let signed_xdr = sign_transaction_xdr(transaction_xdr, secret_key, network)?;
+    let request = wallet_signer::SigningRequest::local_secret(secret_key.to_string(), network);
+    submit_payment_with_signing(transaction_xdr, &request, network).await
+}
+
+pub async fn submit_payment_with_signing(
+    transaction_xdr: &str,
+    request: &wallet_signer::SigningRequest,
+    network: &str,
+) -> Result<TransactionSubmitResult> {
+    let signed_xdr = wallet_signer::sign_transaction_xdr(transaction_xdr, request)?;
 
     let horizon = horizon_url(network)?;
     let url = format!("{}/transactions", horizon);
@@ -530,12 +603,4 @@ fn build_payment_transaction_xdr(
 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(mock_xdr))
-}
-
-fn sign_transaction_xdr(transaction_xdr: &str, secret_key: &str, network: &str) -> Result<String> {
-    let _network_passphrase = config::get_network_passphrase(network);
-
-    let signed_mock = format!("signed_{}_with_{}", transaction_xdr, &secret_key[..8]);
-    use base64::{engine::general_purpose, Engine as _};
-    Ok(general_purpose::STANDARD.encode(signed_mock))
 }

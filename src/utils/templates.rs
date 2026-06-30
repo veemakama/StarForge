@@ -1538,6 +1538,44 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generate_template_docs_includes_key_metadata() {
+        let mut entry = make_entry("erc20-token");
+        entry.description = "A fungible token implementing the ERC-20 interface.".to_string();
+        entry.version = "2.1.0".to_string();
+        entry.verified = true;
+        entry.documented = true;
+        entry.maintenance = MaintenanceStatus::Active;
+        entry.author = "Stellar Community".to_string();
+        entry.license = Some("MIT".to_string());
+        entry.tags = vec!["token".to_string(), "erc20".to_string()];
+        entry.cli_version_min = Some("0.1.0".to_string());
+        entry.repository = Some("https://github.com/example/erc20".to_string());
+
+        let md = generate_template_docs(&entry);
+
+        assert!(md.starts_with("# erc20-token\n"));
+        assert!(md.contains("A fungible token implementing the ERC-20 interface."));
+        assert!(md.contains("- **Version:** 2.1.0"));
+        assert!(md.contains("- **License:** MIT"));
+        assert!(md.contains("- **Tags:** token, erc20"));
+        assert!(md.contains("- **Requires StarForge CLI:** >= 0.1.0"));
+        assert!(md.contains("[VERIFIED]"));
+        assert!(md.contains("starforge template install erc20-token"));
+        assert!(md.contains("[Repository](https://github.com/example/erc20)"));
+        // Quality score is rendered (verified + documented + active => high).
+        assert!(md.contains("Quality score:"));
+    }
+
+    #[test]
+    fn generate_template_docs_omits_absent_optional_sections() {
+        let entry = make_entry("bare");
+        let md = generate_template_docs(&entry);
+        // No links declared => no Links section; no version bound => "any version".
+        assert!(!md.contains("## Links"));
+        assert!(md.contains("- **Requires StarForge CLI:** any version"));
+    }
+
     use std::fs;
     use tempfile::tempdir;
 

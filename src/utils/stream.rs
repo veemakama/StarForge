@@ -1,6 +1,8 @@
 use crate::utils::http_client;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
 use stellar_xdr::curr::{Limited, Limits, ScSymbol, ScVal, WriteXdr};
@@ -12,6 +14,14 @@ pub struct EventStreamFilters {
     pub topic_segments: Option<Vec<String>>,
     pub value_match: Option<String>,
 }
+
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(10)
+        .build()
+        .expect("Failed to create Soroban event stream client")
+});
 
 #[derive(Debug, Clone)]
 pub struct SorobanEventStream {
@@ -99,7 +109,7 @@ impl SorobanEventStream {
             "params": {
                 "filters": [filter],
                 "pagination": {
-                    "cursor": self.cursor,
+                    "cursor": self.cursor.clone(),
                     "limit": 10
                 }
             }

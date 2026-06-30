@@ -1,12 +1,12 @@
 use anyhow::Result;
+use chrono::Utc;
 use colored::*;
-#[allow(unused_imports)]
-use std::process::Command;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
-use chrono::Utc;
+#[allow(unused_imports)]
+use std::process::Command;
 
 pub fn info(message: &str) {
     println!("  {} {}", "•".bright_blue(), message);
@@ -122,7 +122,11 @@ pub fn add_channel(channel_type: &str, destination: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn send_notification(template_name: &str, data: &HashMap<String, String>, severity: &str) -> Result<()> {
+pub fn send_notification(
+    template_name: &str,
+    data: &HashMap<String, String>,
+    severity: &str,
+) -> Result<()> {
     let channels = load_channels()?;
 
     let event = NotificationEvent {
@@ -155,14 +159,20 @@ fn send_email(destination: &str, _template: &str, data: &HashMap<String, String>
 fn send_slack(destination: &str, _template: &str, data: &HashMap<String, String>) -> Result<()> {
     let default_msg = "Deployment notification".to_string();
     let msg = data.get("message").unwrap_or(&default_msg);
-    info(&format!("Slack notification queued to {}: {}", destination, msg));
+    info(&format!(
+        "Slack notification queued to {}: {}",
+        destination, msg
+    ));
     Ok(())
 }
 
 fn send_discord(destination: &str, _template: &str, data: &HashMap<String, String>) -> Result<()> {
     let default_msg = "Deployment notification".to_string();
     let msg = data.get("message").unwrap_or(&default_msg);
-    info(&format!("Discord notification queued to {}: {}", destination, msg));
+    info(&format!(
+        "Discord notification queued to {}: {}",
+        destination, msg
+    ));
     Ok(())
 }
 
@@ -187,6 +197,76 @@ fn save_notification_history(event: &NotificationEvent) -> Result<()> {
     }
     fs::write(path, serde_json::to_string_pretty(&history)?)?;
     Ok(())
+}
+
+pub fn send_approval_notification(
+    template: &str,
+    request_id: &str,
+    contract_id: &str,
+    network: &str,
+    requested_by: &str,
+    level: &str,
+    status: &str,
+) -> Result<()> {
+    let mut data = HashMap::new();
+    data.insert("request_id".to_string(), request_id.to_string());
+    data.insert("contract_id".to_string(), contract_id.to_string());
+    data.insert("network".to_string(), network.to_string());
+    data.insert("requested_by".to_string(), requested_by.to_string());
+    data.insert("level".to_string(), level.to_string());
+    data.insert("status".to_string(), status.to_string());
+    data.insert(
+        "message".to_string(),
+        format!(
+            "Approval {} for deployment of {} on {}",
+            status, contract_id, network
+        ),
+    );
+    send_notification(template, &data, "medium")
+}
+
+pub fn send_approval_requested_notification(
+    request_id: &str,
+    contract_id: &str,
+    network: &str,
+    requested_by: &str,
+    level: &str,
+) -> Result<()> {
+    alert(&format!(
+        "Approval request {} submitted for {} on {} by {}",
+        request_id, contract_id, network, requested_by
+    ));
+    send_approval_notification(
+        "approval_requested",
+        request_id,
+        contract_id,
+        network,
+        requested_by,
+        level,
+        "requested",
+    )
+}
+
+pub fn send_approval_completed_notification(
+    request_id: &str,
+    contract_id: &str,
+    network: &str,
+    approved_by: &str,
+    status: &str,
+) -> Result<()> {
+    success(&format!(
+        "Approval request {} completed: {} by {}",
+        request_id, status, approved_by
+    ));
+    send_approval_notification(
+        "approval_completed",
+        request_id,
+        contract_id,
+        network,
+        approved_by,
+        "",
+        status,
+    )
 }
 
 pub fn list_notification_history(limit: usize) -> Result<Vec<NotificationEvent>> {

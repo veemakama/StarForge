@@ -1,0 +1,262 @@
+name: Fuzzing & Property Testing
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'src/**'
+      - 'fuzz/**'
+      - 'tests/property_tests.rs'
+      - '.github/workflows/fuzzing.yml'
+      - 'Cargo.toml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'fuzz/**'
+      - 'tests/property_tests.rs'
+      - '.github/workflows/fuzzing.yml'
+      - 'Cargo.toml'
+  # Allow manual dispatch with configurable fuzz duration.
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: 'Fuzz duration per target (seconds)'
+        required: false
+        default: '60'
+      proptest_cases:
+        description: 'Number of proptest cases per property'
+        required: false
+        default: '1000'
+
+# Cancel in-progress runs when a new commit is pushed to the same branch.
+concurrency:
+  group: fuzzing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Property-based tests ──────────────────────────────────────────────────
+  property-tests:
+    name: Property-Based Tests (proptest)
+    runs-on: ubuntu-latest
+    env:
+      # Increase case count in CI for better coverage.
+      PROPTEST_CASES: ${{ github.event.inputs.proptest_cases || '2000' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-proptest-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-proptest-
+
+      - name: Run property-based tests
+        run: cargo test --test property_tests --locked -- --test-threads=1
+
+      - name: Run all tests (includes property tests)
+        run: cargo test --locked
+
+  # ── 2. Fuzz harness build check ──────────────────────────────────────────────
+  fuzz-build:
+    name: Build Fuzz Harnesses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly (required by cargo-fuzz / libfuzzer)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Build all fuzz targets (compile check)
+        working-directory: fuzz
+        run: cargo build --locked
+
+  # ── 3. Short fuzz runs (sanity / smoke) ─────────────────────────────────────
+  fuzz-smoke:
+    name: Fuzz Smoke Run (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: fuzz-build
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_validate_public_key
+          - fuzz_validate_secret_key
+          - fuzz_validate_contract_id
+          - fuzz_validate_wallet_name
+          - fuzz_validate_amount
+          - fuzz_passphrase_strength
+          - fuzz_wasm_hash
+          - fuzz_encrypted_bundle_parse
+          - fuzz_template_operations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Cache fuzz target build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-smoke-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-smoke-${{ matrix.target }}-
+
+      - name: Run fuzz target (${{ matrix.target }})
+        run: |
+          DURATION=${{ github.event.inputs.fuzz_duration || '30' }}
+          cargo fuzz run ${{ matrix.target }} \
+            --fuzz-dir fuzz \
+            -- -max_total_time=${DURATION} -max_len=4096
+
+      - name: Upload corpus artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/corpus/${{ matrix.target }}/
+
+  # ── 4. Coverage reporting ─────────────────────────────────────────────────────
+  coverage:
+    name: Coverage Report (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + llvm-tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cov-
+
+      - name: Generate LCOV coverage report
+        env:
+          PROPTEST_CASES: "1000"
+        run: |
+          cargo llvm-cov \
+            --locked \
+            --lcov --output-path target/lcov.info
+
+      - name: Generate JSON coverage summary
+        env:
+          PROPTEST_CASES: "1000"
+        run: |
+          cargo llvm-cov \
+            --locked \
+            --json --output-path target/coverage.json
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: target/lcov.info
+          flags: unittests,property-tests
+          name: starforge-coverage
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ github.run_id }}
+          path: |
+            target/lcov.info
+            target/coverage.json
+
+  # ── 5. Mutation testing (scheduled / manual only) ─────────────────────────────
+  mutation-testing:
+    name: Mutation Testing (cargo-mutants)
+    runs-on: ubuntu-latest
+    # Only run on manual dispatch or schedule (expensive).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-mutants-
+
+      - name: Run mutation testing
+        run: |
+          cargo mutants \
+            --jobs 2 \
+            --timeout 120 \
+            -- --locked
+        continue-on-error: true  # Surviving mutants are informational.
+
+      - name: Upload mutants report
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report-${{ github.run_id }}
+          path: mutants.out/

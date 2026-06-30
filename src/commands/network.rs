@@ -1,6 +1,7 @@
 use crate::utils::{config, http_client, print as p};
 use anyhow::Result;
 use clap::Subcommand;
+use std::time::Duration;
 
 #[derive(Subcommand)]
 pub enum NetworkCommands {
@@ -187,6 +188,11 @@ async fn test_network(network_name: Option<String>) -> Result<()> {
 
     p::info(&format!("Testing connectivity to '{}'…", test_network));
     p::info(&format!("Horizon: {}", net_cfg.horizon_url));
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(10)
+        .build()?;
 
     // Test Horizon endpoint
     let client = http_client::get_client();

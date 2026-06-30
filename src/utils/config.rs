@@ -564,10 +564,21 @@ pub fn load() -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read config at {:?}", path))?;
-    let mut config: Config =
-        toml::from_str(&contents).with_context(|| "Failed to parse config file")?;
+    let contents = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Failed to read config file at '{}'.\n\
+             Check that the file exists and is readable.",
+            path.display()
+        )
+    })?;
+    let mut config: Config = toml::from_str(&contents).with_context(|| {
+        format!(
+            "Failed to parse config file at '{}'.\n\
+             The file may be corrupted or contain invalid TOML.\n\
+             Run `starforge config doctor` to diagnose, or delete the file to reset to defaults.",
+            path.display()
+        )
+    })?;
 
     // Migrate config if needed
     config = migrate_config(config)?;
