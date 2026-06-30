@@ -25,6 +25,8 @@ pub enum VerifyCommands {
     Reports(ReportsArgs),
     /// Show the CI configuration snippet for continuous verification
     Ci(CiArgs),
+    /// Visualize verification results as an ASCII chart
+    Visualize(VisualizeArgs),
 }
 
 #[derive(Subcommand)]
@@ -105,6 +107,16 @@ pub struct ReportsArgs {
     /// Filter by contract label
     #[arg(long)]
     pub contract: Option<String>,
+}
+
+#[derive(Args)]
+pub struct VisualizeArgs {
+    /// Contract label
+    #[arg(long)]
+    pub contract: String,
+    /// Output as JSON instead of ASCII chart
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -368,6 +380,7 @@ pub async fn handle(cmd: VerifyCommands) -> Result<()> {
         VerifyCommands::Report(args) => handle_report(args),
         VerifyCommands::Reports(args) => handle_reports(args),
         VerifyCommands::Ci(args) => handle_ci(args),
+        VerifyCommands::Visualize(args) => handle_visualize(args),
     }
 }
 
@@ -869,6 +882,67 @@ jobs:
         "Copy the snippet above into your {} CI config.",
         args.platform
     ));
+    Ok(())
+}
+
+fn handle_visualize(args: VisualizeArgs) -> Result<()> {
+    p::header("Verification Result Visualization");
+
+    let reports = load_reports()?;
+    let report = reports
+        .iter()
+        .rev()
+        .find(|r| r.contract == args.contract)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No verification report found for contract '{}'. Run `starforge verify run` first.",
+                args.contract
+            )
+        })?;
+
+    if args.json {
+        let chart = serde_json::json!({
+            "contract": report.contract,
+            "proven": report.proven,
+            "violated": report.violated,
+            "unknown": report.unknown,
+            "skipped": report.skipped,
+            "total": report.total_properties,
+        });
+        println!("{}", serde_json::to_string_pretty(&chart)?);
+        return Ok(());
+    }
+
+    let total = report.total_properties.max(1);
+    let bar = |count: usize, label: &str, color: fn(&str) -> colored::ColoredString| {
+        let width = (count * 40 / total).max(if count > 0 { 1 } else { 0 });
+        let bar_str = "█".repeat(width);
+        println!(
+            "  {:<10} {} {} ({})",
+            label,
+            color(&bar_str),
+            count,
+            format!("{:.0}%", count as f64 / total as f64 * 100.0).dimmed()
+        );
+    };
+
+    p::kv("Contract", &report.contract);
+    p::kv("Report ID", &report.id);
+    p::kv("WASM hash", &report.wasm_hash[..16.min(report.wasm_hash.len())]);
+    println!();
+    println!("  {}", "Property Results".bright_white().bold());
+    bar(report.proven, "Proven", |s| s.green());
+    bar(report.violated, "Violated", |s| s.red());
+    bar(report.unknown, "Unknown", |s| s.yellow());
+    bar(report.skipped, "Skipped", |s| s.dimmed());
+
+    if report.is_critical_violation() {
+        println!();
+        p::warn("Critical property violations detected");
+    } else if report.violated == 0 && report.proven > 0 {
+        println!();
+        p::success("All checked properties passed or are proven");
+    }
     Ok(())
 }
 

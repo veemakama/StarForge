@@ -775,6 +775,73 @@ pub fn get_template(name: &str) -> Result<TemplateEntry> {
         .ok_or_else(|| anyhow::anyhow!("Template '{}' not found in registry", name))
 }
 
+/// Render a Markdown documentation page for a template from its registry
+/// metadata. Used by `starforge template docs <name>` to keep per-template
+/// documentation consistent and auto-generated rather than hand-written.
+pub fn generate_template_docs(entry: &TemplateEntry) -> String {
+    let mut md = String::new();
+
+    md.push_str(&format!("# {}\n\n", entry.name));
+    if !entry.description.is_empty() {
+        md.push_str(&format!("{}\n\n", entry.description));
+    }
+
+    let badges = entry.trust_indicators();
+    if !badges.is_empty() {
+        md.push_str(&format!("{}\n\n", badges.join(" ")));
+    }
+
+    md.push_str("## Overview\n\n");
+    md.push_str(&format!("- **Version:** {}\n", entry.version));
+    md.push_str(&format!("- **Quality score:** {}/100\n", entry.quality_score()));
+    md.push_str(&format!(
+        "- **Verified:** {}\n",
+        if entry.verified { "yes" } else { "no" }
+    ));
+    md.push_str(&format!("- **Maintenance:** {}\n", entry.maintenance.label()));
+    if !entry.author.is_empty() {
+        md.push_str(&format!("- **Author:** {}\n", entry.author));
+    }
+    if let Some(license) = &entry.license {
+        md.push_str(&format!("- **License:** {}\n", license));
+    }
+    if !entry.tags.is_empty() {
+        md.push_str(&format!("- **Tags:** {}\n", entry.tags.join(", ")));
+    }
+
+    // CLI compatibility, mirroring the bounds used by `check_version_range`.
+    let compat = match (&entry.cli_version_min, &entry.cli_version_max) {
+        (Some(min), Some(max)) => format!(">= {} and <= {}", min, max),
+        (Some(min), None) => format!(">= {}", min),
+        (None, Some(max)) => format!("<= {}", max),
+        (None, None) => "any version".to_string(),
+    };
+    md.push_str(&format!("- **Requires StarForge CLI:** {}\n", compat));
+    md.push('\n');
+
+    md.push_str("## Install\n\n");
+    md.push_str("```bash\n");
+    md.push_str(&format!("starforge template install {}\n", entry.name));
+    md.push_str("```\n\n");
+
+    let links: Vec<(&str, &Option<String>)> = vec![
+        ("Repository", &entry.repository),
+        ("Homepage", &entry.homepage),
+        ("Documentation", &entry.documentation),
+    ];
+    let present: Vec<String> = links
+        .into_iter()
+        .filter_map(|(label, url)| url.as_ref().map(|u| format!("- [{}]({})", label, u)))
+        .collect();
+    if !present.is_empty() {
+        md.push_str("## Links\n\n");
+        md.push_str(&present.join("\n"));
+        md.push('\n');
+    }
+
+    md
+}
+
 pub fn get_template_by_name_and_version(
     name: &str,
     version: Option<&str>,
@@ -1534,6 +1601,44 @@ mod tests {
             homepage: None,
             documentation: None,
         }
+    }
+
+    #[test]
+    fn generate_template_docs_includes_key_metadata() {
+        let mut entry = make_entry("erc20-token");
+        entry.description = "A fungible token implementing the ERC-20 interface.".to_string();
+        entry.version = "2.1.0".to_string();
+        entry.verified = true;
+        entry.documented = true;
+        entry.maintenance = MaintenanceStatus::Active;
+        entry.author = "Stellar Community".to_string();
+        entry.license = Some("MIT".to_string());
+        entry.tags = vec!["token".to_string(), "erc20".to_string()];
+        entry.cli_version_min = Some("0.1.0".to_string());
+        entry.repository = Some("https://github.com/example/erc20".to_string());
+
+        let md = generate_template_docs(&entry);
+
+        assert!(md.starts_with("# erc20-token\n"));
+        assert!(md.contains("A fungible token implementing the ERC-20 interface."));
+        assert!(md.contains("- **Version:** 2.1.0"));
+        assert!(md.contains("- **License:** MIT"));
+        assert!(md.contains("- **Tags:** token, erc20"));
+        assert!(md.contains("- **Requires StarForge CLI:** >= 0.1.0"));
+        assert!(md.contains("[VERIFIED]"));
+        assert!(md.contains("starforge template install erc20-token"));
+        assert!(md.contains("[Repository](https://github.com/example/erc20)"));
+        // Quality score is rendered (verified + documented + active => high).
+        assert!(md.contains("Quality score:"));
+    }
+
+    #[test]
+    fn generate_template_docs_omits_absent_optional_sections() {
+        let entry = make_entry("bare");
+        let md = generate_template_docs(&entry);
+        // No links declared => no Links section; no version bound => "any version".
+        assert!(!md.contains("## Links"));
+        assert!(md.contains("- **Requires StarForge CLI:** any version"));
     }
 
     use std::fs;
