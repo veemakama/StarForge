@@ -80,9 +80,9 @@ pub fn track_findings(
     let now = Utc::now().to_rfc3339();
 
     for (title, severity, description, remediation) in findings {
-        let exists = items
-            .iter()
-            .any(|i| i.source == source && &i.title == title && i.status != RemediationStatus::WontFix);
+        let exists = items.iter().any(|i| {
+            i.source == source && &i.title == title && i.status != RemediationStatus::WontFix
+        });
         if exists {
             continue;
         }

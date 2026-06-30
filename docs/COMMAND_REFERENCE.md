@@ -115,6 +115,14 @@ starforge contract generate-bindings ./token.wasm --lang rust
 | `--fixture <FILE>` | JSON/TOML contract test suite with fixtures, mocks, and assertions |
 | `--source <FILE>` | Contract source used for generated tests or coverage |
 | `--coverage` | Include source coverage summary |
+| `--coverage-out <FILE>` | Write a dedicated coverage report |
+| `--coverage-format html\|json\|markdown\|text` | Format for `--coverage-out` |
+| `--coverage-goal <PCT>` | Minimum overall coverage percentage |
+| `--function-coverage-goal <PCT>` | Minimum function coverage percentage |
+| `--line-coverage-goal <PCT>` | Minimum line coverage percentage |
+| `--branch-coverage-goal <PCT>` | Minimum branch coverage percentage |
+| `--coverage-ci` | Fail when configured coverage goals are missed |
+| `--coverage-ci-workflow-out <FILE>` | Generate a GitHub Actions coverage workflow |
 | `--report html\|json\|junit` | Write a test report (`junit` is available for fixture suites) |
 | `--testnet` | Validate Soroban testnet integration for the run |
 | `--testnet-dry-run` | Validate testnet configuration without probing RPC health |
@@ -123,11 +131,19 @@ starforge contract generate-bindings ./token.wasm --lang rust
 starforge test --wasm ./target/contract.wasm \
   --fixture ./contract-tests.json --coverage --source ./src/lib.rs --report html
 
+starforge test --wasm ./target/contract.wasm --source ./src/lib.rs \
+  --coverage --coverage-out coverage.html --coverage-format html \
+  --coverage-ci --coverage-goal 85 --branch-coverage-goal 70
+
+starforge test --wasm ./target/contract.wasm --source ./src/lib.rs \
+  --coverage-ci-workflow-out .github/workflows/starforge-coverage.yml
+
 starforge test --wasm ./target/contract.wasm \
   --fixture ./contract-tests.toml --testnet --testnet-dry-run
 ```
 
 Fixture suites support named storage fixtures, mocked contract calls, and assertions such as `state_equals`, `state_exists`, `return_equals`, `event_emitted`, `fee_at_most`, and `mock_called`.
+Coverage analysis tracks Soroban contract functions, line spans, branch paths, uncovered functions, threshold goals, and HTML/JSON/Markdown/text reports.
 
 ---
 

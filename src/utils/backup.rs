@@ -9,8 +9,8 @@ use zip::write::FileOptions;
 use zip::ZipWriter;
 
 use crate::utils::config;
-use crate::utils::soroban::ContractInspectResult;
 use crate::utils::crypto::{decrypt_secret, encrypt_secret};
+use crate::utils::soroban::ContractInspectResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BackupStatus {
@@ -184,7 +184,9 @@ fn add_path_to_zip<W: Write + std::io::Seek>(
             add_path_to_zip(zip, base, &entry.path(), options)?;
         }
     } else {
-        let rel = path.strip_prefix(base.parent().unwrap_or(base)).unwrap_or(path);
+        let rel = path
+            .strip_prefix(base.parent().unwrap_or(base))
+            .unwrap_or(path);
         zip.start_file(rel.to_string_lossy(), options)?;
         let mut f = fs::File::open(path)?;
         let mut contents = Vec::new();
@@ -211,7 +213,8 @@ pub fn create_backup(
     let now = Utc::now().to_rfc3339();
 
     let (filename, write_bytes): (String, Vec<u8>) = if encrypt {
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &archive_bytes);
+        let b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &archive_bytes);
         let bundle = encrypt_secret(passphrase.unwrap(), &b64, None)?;
         (format!("{}.bak.enc", id), bundle.into_bytes())
     } else {
@@ -260,7 +263,13 @@ pub fn create_contract_state_backup(
         .join(format!("{}-state-manifest.json", inspect.contract_id));
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
 
-    let mut record = create_backup(&[manifest_path.clone()], label, encrypt, passphrase, region)?;
+    let mut record = create_backup(
+        std::slice::from_ref(&manifest_path),
+        label,
+        encrypt,
+        passphrase,
+        region,
+    )?;
     let durable_manifest_path = backups_dir()?.join(format!("{}.contract-state.json", record.id));
     let mut durable_manifest = manifest;
     durable_manifest.backup_id = Some(record.id.clone());
@@ -520,7 +529,10 @@ pub fn test_restore(id: &str, passphrase: Option<&str>) -> Result<usize> {
     let extracted = restore_backup(id, tmp.path(), passphrase)?;
     for path in &extracted {
         if !Path::new(path).exists() {
-            anyhow::bail!("Recovery test failed: expected file '{}' missing after restore", path);
+            anyhow::bail!(
+                "Recovery test failed: expected file '{}' missing after restore",
+                path
+            );
         }
     }
     Ok(extracted.len())
@@ -631,7 +643,11 @@ pub fn run_automation(passphrase: Option<&str>) -> Result<Vec<String>> {
         let due = match &cfg.last_run {
             None => true,
             Some(last) => DateTime::parse_from_rfc3339(last)
-                .map(|dt| now.signed_duration_since(dt.with_timezone(&Utc)).num_hours() as u64 >= cfg.interval_hours)
+                .map(|dt| {
+                    now.signed_duration_since(dt.with_timezone(&Utc))
+                        .num_hours() as u64
+                        >= cfg.interval_hours
+                })
                 .unwrap_or(true),
         };
         if !due {

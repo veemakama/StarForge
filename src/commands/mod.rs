@@ -1,8 +1,8 @@
 pub mod analytics;
 pub mod audit;
 pub mod backup;
-pub mod bridge;
 pub mod benchmark;
+pub mod bridge;
 pub mod command_tree;
 pub mod completions;
 pub mod config;

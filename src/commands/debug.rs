@@ -159,8 +159,7 @@ async fn handle_start(args: StartArgs) -> Result<()> {
                 }
                 sess.set_variables(vars);
 
-                let mut frames = Vec::new();
-                frames.push(debugger::StackFrame {
+                let frames = vec![debugger::StackFrame {
                     function: "contract_init".to_string(),
                     contract_id: Some(cid.clone()),
                     source_location: None,
@@ -173,7 +172,7 @@ async fn handle_start(args: StartArgs) -> Result<()> {
                             value: e.value.clone(),
                         })
                         .collect(),
-                });
+                }];
                 sess.set_call_stack(frames);
                 sess.add_step_history("Debug session started".to_string());
             }
@@ -283,21 +282,33 @@ async fn handle_step(args: StepArgs) -> Result<()> {
             debugger.step_out();
             p::success("Stepping out of current function…");
         }
-        _ => anyhow::bail!("Invalid step direction '{}'. Use 'into', 'over', or 'out'.", args.direction),
+        _ => anyhow::bail!(
+            "Invalid step direction '{}'. Use 'into', 'over', or 'out'.",
+            args.direction
+        ),
     }
 
-    debugger.session.add_step_history(format!("step {}", args.direction));
+    debugger
+        .session
+        .add_step_history(format!("step {}", args.direction));
 
-    simulate_step(debugger).await?;
+    simulate_step(debugger)?;
 
     Ok(())
 }
 
-async fn simulate_step(debugger: &mut Debugger) -> Result<()> {
-    let current_fn = debugger.session.current_function.clone().unwrap_or_default();
+fn simulate_step(debugger: &mut Debugger) -> Result<()> {
+    let current_fn = debugger
+        .session
+        .current_function
+        .clone()
+        .unwrap_or_default();
 
     p::separator();
-    p::kv_accent("Current Depth", &debugger.session.call_stack.len().to_string());
+    p::kv_accent(
+        "Current Depth",
+        &debugger.session.call_stack.len().to_string(),
+    );
     p::kv_accent("Step Count", &debugger.session.step_count.to_string());
 
     if !current_fn.is_empty() {
@@ -449,7 +460,11 @@ async fn handle_stack() -> Result<()> {
     if frames.is_empty() {
         p::info("Call stack is empty.");
     } else {
-        p::header(&format!("Call Stack ({} frame{})", frames.len(), if frames.len() == 1 { "" } else { "s" }));
+        p::header(&format!(
+            "Call Stack ({} frame{})",
+            frames.len(),
+            if frames.len() == 1 { "" } else { "s" }
+        ));
         p::separator();
         for (i, frame) in frames.iter().enumerate() {
             let depth = frames.len() - i;
@@ -587,7 +602,12 @@ async fn handle_ui(args: UiArgs) -> Result<()> {
 async fn manage_breakpoints_interactive() -> Result<()> {
     let selection = Select::new()
         .with_prompt("Breakpoint Action")
-        .items(&["List Breakpoints", "Add Breakpoint", "Remove Breakpoint", "Go Back"])
+        .items(&[
+            "List Breakpoints",
+            "Add Breakpoint",
+            "Remove Breakpoint",
+            "Go Back",
+        ])
         .default(0)
         .interact()?;
 
@@ -596,9 +616,7 @@ async fn manage_breakpoints_interactive() -> Result<()> {
             handle_breakpoint(BreakpointCommands::List).await?;
         }
         1 => {
-            let function: String = Input::new()
-                .with_prompt("Function name")
-                .interact_text()?;
+            let function: String = Input::new().with_prompt("Function name").interact_text()?;
             let contract_id: String = Input::new()
                 .with_prompt("Contract ID (optional)")
                 .allow_empty(true)
@@ -635,5 +653,3 @@ async fn manage_breakpoints_interactive() -> Result<()> {
     }
     Ok(())
 }
-
-

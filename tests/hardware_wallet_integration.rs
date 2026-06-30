@@ -232,7 +232,10 @@ fn test_hardware_wallet_multisig_sign_flag_documented() {
         .output()
         .expect("Failed to get multisig sign help");
 
-    assert!(output.status.success(), "Multisig sign help should be available");
+    assert!(
+        output.status.success(),
+        "Multisig sign help should be available"
+    );
     let help_text = String::from_utf8_lossy(&output.stdout).to_lowercase();
     assert!(
         help_text.contains("hardware"),
@@ -251,7 +254,10 @@ fn test_hardware_wallet_connect_timeout_flag_documented() {
         .output()
         .expect("Failed to get wallet connect help");
 
-    assert!(output.status.success(), "Wallet connect help should be available");
+    assert!(
+        output.status.success(),
+        "Wallet connect help should be available"
+    );
     let help_text = String::from_utf8_lossy(&output.stdout).to_lowercase();
     assert!(
         help_text.contains("timeout"),

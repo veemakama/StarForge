@@ -140,8 +140,8 @@ impl DeploymentVerifier {
             });
 
             let local_hash = hex::encode(Sha256::digest(bytes));
-            let hash_match = local_hash == self.record.wasm_hash
-                || self.record.wasm_hash.is_empty();
+            let hash_match =
+                local_hash == self.record.wasm_hash || self.record.wasm_hash.is_empty();
             checks.push(VerificationCheck {
                 name: "local_wasm_hash".to_string(),
                 category: "bytecode".to_string(),
@@ -160,10 +160,7 @@ impl DeploymentVerifier {
                 name: "wasm_format".to_string(),
                 category: "bytecode".to_string(),
                 status: CheckStatus::Skipped,
-                detail: format!(
-                    "WASM file not found at {}",
-                    self.record.wasm_path
-                ),
+                detail: format!("WASM file not found at {}", self.record.wasm_path),
             });
         }
 
@@ -226,8 +223,8 @@ impl DeploymentVerifier {
     fn check_bytecode_hash_match(&self, inspect: &ContractInspectResult) -> VerificationCheck {
         match &inspect.wasm_hash {
             Some(onchain) => {
-                let matches = onchain == &self.record.wasm_hash
-                    || onchain == "mock_wasm_hash_placeholder";
+                let matches =
+                    onchain == &self.record.wasm_hash || onchain == "mock_wasm_hash_placeholder";
                 VerificationCheck {
                     name: "bytecode_hash_match".to_string(),
                     category: "bytecode".to_string(),

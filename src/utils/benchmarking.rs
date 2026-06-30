@@ -125,10 +125,16 @@ fn score_lower_is_better(actual: f64, threshold: f64) -> (f64, ComparisonStatus)
         } else {
             ComparisonStatus::Meets
         };
-        (100.0_f64.min(80.0 + bonus * 0.2 + (1.0 - ratio) * 20.0), status)
+        (
+            100.0_f64.min(80.0 + bonus * 0.2 + (1.0 - ratio) * 20.0),
+            status,
+        )
     } else {
         let over = (ratio - 1.0).min(2.0);
-        (((1.0 - over / 2.0) * 79.0).max(0.0), ComparisonStatus::Below)
+        (
+            ((1.0 - over / 2.0) * 79.0).max(0.0),
+            ComparisonStatus::Below,
+        )
     }
 }
 
@@ -153,8 +159,7 @@ pub fn run_benchmark(contract_id: &str, network: &str, category: &str) -> Result
     let report = performance::generate_report(contract_id, network)?;
     let summary = &report.summary;
 
-    let (gas_score, gas_status) =
-        score_lower_is_better(summary.avg_gas_used, standard.max_avg_gas);
+    let (gas_score, gas_status) = score_lower_is_better(summary.avg_gas_used, standard.max_avg_gas);
     let (time_score, time_status) =
         score_lower_is_better(summary.avg_execution_time_ms, standard.max_avg_execution_ms);
     let (success_score, success_status) =
@@ -274,7 +279,10 @@ mod tests {
     fn lower_is_better_rewards_under_threshold() {
         let (score, status) = score_lower_is_better(500.0, 1000.0);
         assert!(score > 80.0);
-        assert!(matches!(status, ComparisonStatus::Better | ComparisonStatus::Meets));
+        assert!(matches!(
+            status,
+            ComparisonStatus::Better | ComparisonStatus::Meets
+        ));
     }
 
     #[test]

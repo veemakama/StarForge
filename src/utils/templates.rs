@@ -793,12 +793,18 @@ pub fn generate_template_docs(entry: &TemplateEntry) -> String {
 
     md.push_str("## Overview\n\n");
     md.push_str(&format!("- **Version:** {}\n", entry.version));
-    md.push_str(&format!("- **Quality score:** {}/100\n", entry.quality_score()));
+    md.push_str(&format!(
+        "- **Quality score:** {}/100\n",
+        entry.quality_score()
+    ));
     md.push_str(&format!(
         "- **Verified:** {}\n",
         if entry.verified { "yes" } else { "no" }
     ));
-    md.push_str(&format!("- **Maintenance:** {}\n", entry.maintenance.label()));
+    md.push_str(&format!(
+        "- **Maintenance:** {}\n",
+        entry.maintenance.label()
+    ));
     if !entry.author.is_empty() {
         md.push_str(&format!("- **Author:** {}\n", entry.author));
     }

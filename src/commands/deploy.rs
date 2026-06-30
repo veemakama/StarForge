@@ -334,7 +334,8 @@ pub async fn handle(args: DeployArgs) -> Result<()> {
             wasm_size_kb,
             wallet,
             &args.network,
-        ).await;
+        )
+        .await;
     }
 
     if args.simulate {
@@ -422,15 +423,17 @@ pub async fn handle(args: DeployArgs) -> Result<()> {
     let pb = p::progress_bar(3, "Starting deployment steps...");
 
     pb.set_message("Verifying account on-chain...");
-    let account = horizon::fetch_account(&wallet.public_key, &args.network).await.map_err(|e| {
-        pb.abandon();
-        anyhow::anyhow!(
-            "Account not active on {}: {}\nFund it with: starforge wallet fund {}",
-            args.network,
-            e,
-            wallet.name
-        )
-    })?;
+    let account = horizon::fetch_account(&wallet.public_key, &args.network)
+        .await
+        .map_err(|e| {
+            pb.abandon();
+            anyhow::anyhow!(
+                "Account not active on {}: {}\nFund it with: starforge wallet fund {}",
+                args.network,
+                e,
+                wallet.name
+            )
+        })?;
 
     let xlm = account
         .balances
@@ -495,7 +498,12 @@ pub async fn handle(args: DeployArgs) -> Result<()> {
             p::error(&format!("Stellar CLI deployment failed: {}", stderr));
 
             // Automatic rollback safety net: revert to the last good deployment.
-            handle_failed_deploy_rollback(args.no_auto_rollback, previous, &wallet.name, &args.network)?;
+            handle_failed_deploy_rollback(
+                args.no_auto_rollback,
+                previous,
+                &wallet.name,
+                &args.network,
+            )?;
 
             anyhow::bail!("Stellar CLI deployment failed: {}", stderr);
         }
@@ -567,12 +575,18 @@ mod tests {
         let id = format!("C{}", "A".repeat(55));
         assert_eq!(id.len(), 56);
         let stdout = format!("ℹ️  Simulating deploy...\nℹ️  Submitting...\n{}\n", id);
-        assert_eq!(parse_contract_id_from_stdout(&stdout).as_deref(), Some(id.as_str()));
+        assert_eq!(
+            parse_contract_id_from_stdout(&stdout).as_deref(),
+            Some(id.as_str())
+        );
     }
 
     #[test]
     fn returns_none_when_no_contract_id_present() {
-        assert_eq!(parse_contract_id_from_stdout("deploy failed: timeout"), None);
+        assert_eq!(
+            parse_contract_id_from_stdout("deploy failed: timeout"),
+            None
+        );
         // A 56-char wallet public key (G...) must not be mistaken for a contract id.
         let gkey = format!("G{}", "A".repeat(55));
         assert_eq!(gkey.len(), 56);

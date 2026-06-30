@@ -341,7 +341,11 @@ impl Database {
         rows.map(|r| r.map_err(anyhow::Error::from)).collect()
     }
 
-    pub fn aggregate_events(&self, bucket: &AggregationBucket, filters: &EventSearchFilters) -> Result<Vec<EventAggregation>> {
+    pub fn aggregate_events(
+        &self,
+        bucket: &AggregationBucket,
+        filters: &EventSearchFilters,
+    ) -> Result<Vec<EventAggregation>> {
         let bucket_sql = match bucket {
             AggregationBucket::Hour => "strftime('%Y-%m-%d %H:00:00', timestamp) AS bucket",
             AggregationBucket::Day => "strftime('%Y-%m-%d', timestamp) AS bucket",
@@ -402,7 +406,12 @@ impl Database {
         rows.map(|r| r.map_err(anyhow::Error::from)).collect()
     }
 
-    pub fn export_events(&self, filters: &EventSearchFilters, format: ExportFormat, writer: &mut impl std::io::Write) -> Result<()> {
+    pub fn export_events(
+        &self,
+        filters: &EventSearchFilters,
+        format: ExportFormat,
+        writer: &mut impl std::io::Write,
+    ) -> Result<()> {
         let events = self.search_events(filters)?;
 
         match format {
@@ -411,7 +420,16 @@ impl Database {
             }
             ExportFormat::Csv => {
                 let mut wtr = csv::Writer::from_writer(writer);
-                wtr.write_record(&["id", "event_type", "contract_id", "ledger", "topics", "value", "timestamp", "network"])?;
+                wtr.write_record(&[
+                    "id",
+                    "event_type",
+                    "contract_id",
+                    "ledger",
+                    "topics",
+                    "value",
+                    "timestamp",
+                    "network",
+                ])?;
                 for event in events {
                     wtr.write_record(&[
                         &event.id,
@@ -792,7 +810,7 @@ mod tests {
             network: "testnet".to_string(),
         };
         db.insert_event(&event).unwrap();
-        
+
         let filters = EventSearchFilters {
             contract_id: Some("CABC123".to_string()),
             ..Default::default()
@@ -822,13 +840,15 @@ mod tests {
             ledger: 2,
             topics: None,
             value: "{}".to_string(),
-            timestamp: "2024-01-01T01:00:00Z".to_string(),
+            timestamp: "2024-01-01T00:30:00Z".to_string(),
             network: "testnet".to_string(),
         };
         db.insert_event(&event1).unwrap();
         db.insert_event(&event2).unwrap();
 
-        let aggregates = db.aggregate_events(&AggregationBucket::Hour, &EventSearchFilters::default()).unwrap();
+        let aggregates = db
+            .aggregate_events(&AggregationBucket::Hour, &EventSearchFilters::default())
+            .unwrap();
         assert_eq!(aggregates.len(), 1);
         assert_eq!(aggregates[0].count, 2);
     }

@@ -423,7 +423,10 @@ async fn handle_contract_state(args: ContractStateArgs) -> Result<()> {
     p::kv("Contract", &manifest.contract_id);
     p::kv("Network", &manifest.source_network);
     p::kv("Latest ledger", &manifest.latest_ledger.to_string());
-    p::kv("State entries", &manifest.instance_storage.len().to_string());
+    p::kv(
+        "State entries",
+        &manifest.instance_storage.len().to_string(),
+    );
     p::kv("Checksum", &manifest.checksum);
     p::success("Contract state backup created and verified");
     Ok(())

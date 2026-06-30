@@ -89,7 +89,8 @@ impl DebugSession {
 
     pub fn add_step_history(&mut self, entry: String) {
         self.step_count += 1;
-        self.history.push(format!("#{}: {}", self.step_count, entry));
+        self.history
+            .push(format!("#{}: {}", self.step_count, entry));
     }
 
     pub fn set_variables(&mut self, vars: Vec<Variable>) {
@@ -180,7 +181,7 @@ impl Debugger {
             let contract_matches = self.session.breakpoints[i]
                 .contract_id
                 .as_ref()
-                .map_or(true, |cid| cid == contract_id);
+                .is_none_or(|cid| cid == contract_id);
             if contract_matches && self.session.breakpoints[i].function == function {
                 if let Some(ref condition) = self.session.breakpoints[i].condition {
                     if !evaluate_condition(condition) {
@@ -252,13 +253,12 @@ impl Debugger {
             .collect();
         for frame in &self.session.call_stack {
             for v in &frame.variables {
-                if !results.iter().any(|r| std::ptr::eq(*r, v)) {
-                    if v.name.to_lowercase().contains(&lower)
+                if !results.iter().any(|r| std::ptr::eq(*r, v))
+                    && (v.name.to_lowercase().contains(&lower)
                         || v.value.to_lowercase().contains(&lower)
-                        || v.var_type.to_lowercase().contains(&lower)
-                    {
-                        results.push(v);
-                    }
+                        || v.var_type.to_lowercase().contains(&lower))
+                {
+                    results.push(v);
                 }
             }
         }

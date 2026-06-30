@@ -928,7 +928,10 @@ fn handle_visualize(args: VisualizeArgs) -> Result<()> {
 
     p::kv("Contract", &report.contract);
     p::kv("Report ID", &report.id);
-    p::kv("WASM hash", &report.wasm_hash[..16.min(report.wasm_hash.len())]);
+    p::kv(
+        "WASM hash",
+        &report.wasm_hash[..16.min(report.wasm_hash.len())],
+    );
     println!();
     println!("  {}", "Property Results".bright_white().bold());
     bar(report.proven, "Proven", |s| s.green());

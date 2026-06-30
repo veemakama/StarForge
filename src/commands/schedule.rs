@@ -267,7 +267,10 @@ fn handle_run(args: RunArgs) -> Result<()> {
         }
     }
 
-    p::success(&format!("Executed {} scheduled deployment(s)", executed.len()));
+    p::success(&format!(
+        "Executed {} scheduled deployment(s)",
+        executed.len()
+    ));
     Ok(())
 }
 

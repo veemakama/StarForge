@@ -3,27 +3,24 @@ use starforge::utils::{
         assert_auth_called, assert_balance_eq, assert_balance_gte, assert_err,
         assert_error_contains, assert_event_count, assert_event_emitted, assert_event_not_emitted,
         assert_ledger_gte, assert_ok, assert_return_value, assert_storage_absent,
-        assert_storage_eq, assert_storage_numeric, assert_storage_present,
-        AssertionStatus, AssertionSuite, ContractAssertions, NumericComparator,
+        assert_storage_eq, assert_storage_numeric, assert_storage_present, AssertionStatus,
+        AssertionSuite, ContractAssertions, NumericComparator,
     },
     contract_fixtures::{
-        counter_fixture, liquidity_pool_fixture, multisig_fixture, token_fixture,
-        AccountRole, FixturePhase, FixtureRegistry, StorageDurability, StorageSeed,
-        save_fixture_snapshot,
+        counter_fixture, liquidity_pool_fixture, multisig_fixture, save_fixture_snapshot,
+        token_fixture, AccountRole, FixturePhase, FixtureRegistry, StorageDurability, StorageSeed,
     },
     contract_mocks::{
-        counter_env, token_env, MockAddress, MockAuthContext, MockContractClient,
-        MockEnvironment, MockEvent, MockEventLog, MockLedger, MockStorage, MockTokenBalances,
-        StorageKey,
+        counter_env, token_env, MockAddress, MockAuthContext, MockContractClient, MockEnvironment,
+        MockEvent, MockEventLog, MockLedger, MockStorage, MockTokenBalances, StorageKey,
     },
     contract_test_framework::{
-        ContractTestFramework, FrameworkConfig, FrameworkTestSuite, ReportFormat, TestCase,
-        TestCaseResult, counter_test_suite, token_test_suite,
+        counter_test_suite, token_test_suite, ContractTestFramework, FrameworkConfig,
+        FrameworkTestSuite, ReportFormat, TestCase, TestCaseResult,
     },
     contract_test_runner::{ContractTestRunner, TestRunConfig},
     testnet_integration::{
-        SorobanNetwork, TestnetConfig, TestnetDeployer, TestnetSession,
-        run_connectivity_smoke_test,
+        run_connectivity_smoke_test, SorobanNetwork, TestnetConfig, TestnetDeployer, TestnetSession,
     },
 };
 use std::io::Write as IoWrite;
@@ -68,7 +65,10 @@ fn fixture_counter_full_lifecycle() {
     assert_eq!(count_seed.value, serde_json::json!(0u64));
 
     assert_eq!(ctx.value("initial_count"), Some(&serde_json::json!(0u64)));
-    assert_eq!(ctx.metadata.get("contract_type").map(|s| s.as_str()), Some("counter"));
+    assert_eq!(
+        ctx.metadata.get("contract_type").map(|s| s.as_str()),
+        Some("counter")
+    );
 
     fixture.teardown().unwrap();
 }
@@ -232,7 +232,9 @@ fn mock_contract_client_full_flow() {
     let val = client.invoke("get_count", vec![], None, 1).unwrap();
     assert_eq!(val, serde_json::json!(0u64));
 
-    let inc = client.invoke("increment", vec![], Some(MockAddress::account(1)), 1).unwrap();
+    let inc = client
+        .invoke("increment", vec![], Some(MockAddress::account(1)), 1)
+        .unwrap();
     assert_eq!(inc, serde_json::json!(1u64));
 
     let err = client.invoke("admin_reset", vec![], None, 1);
@@ -250,7 +252,8 @@ fn mock_contract_client_full_flow() {
 fn mock_environment_full_integration() {
     let mut env = MockEnvironment::new();
 
-    env.storage.set(StorageKey::instance("admin"), serde_json::json!("GBADMIN"));
+    env.storage
+        .set(StorageKey::instance("admin"), serde_json::json!("GBADMIN"));
     env.balances.mint("TST", "alice", 1_000_000);
     env.auth.auto_approve(MockAddress::account(1));
 
@@ -292,10 +295,18 @@ fn mock_ledger_advance_and_timestamp() {
 fn assertions_storage_full_coverage() {
     let env = counter_env();
 
-    let eq = assert_storage_eq(&env, &StorageKey::instance("count"), &serde_json::json!(0u64));
+    let eq = assert_storage_eq(
+        &env,
+        &StorageKey::instance("count"),
+        &serde_json::json!(0u64),
+    );
     assert_eq!(eq.status, AssertionStatus::Passed);
 
-    let neq = assert_storage_eq(&env, &StorageKey::instance("count"), &serde_json::json!(99u64));
+    let neq = assert_storage_eq(
+        &env,
+        &StorageKey::instance("count"),
+        &serde_json::json!(99u64),
+    );
     assert_eq!(neq.status, AssertionStatus::Failed);
     assert!(neq.expected.is_some());
     assert!(neq.actual.is_some());
@@ -441,12 +452,8 @@ fn assertion_suite_merge() {
     let mut a = AssertionSuite::new();
     let mut b = AssertionSuite::new();
 
-    a.push(starforge::utils::contract_assertions::AssertionResult::pass(
-        "test_a", "ok",
-    ));
-    b.push(starforge::utils::contract_assertions::AssertionResult::fail(
-        "test_b", "failed",
-    ));
+    a.push(starforge::utils::contract_assertions::AssertionResult::pass("test_a", "ok"));
+    b.push(starforge::utils::contract_assertions::AssertionResult::fail("test_b", "failed"));
 
     a.merge(b);
     assert_eq!(a.total(), 2);
@@ -541,7 +548,11 @@ fn framework_counter_suite_passes() {
     assert!(
         result.all_passed(),
         "counter suite failures: {:?}",
-        result.results.iter().filter(|r| !r.passed).collect::<Vec<_>>()
+        result
+            .results
+            .iter()
+            .filter(|r| !r.passed)
+            .collect::<Vec<_>>()
     );
     assert_eq!(result.suite_name, "counter");
     assert_eq!(result.total, 3);
@@ -554,7 +565,11 @@ fn framework_token_suite_passes() {
     assert!(
         result.all_passed(),
         "token suite failures: {:?}",
-        result.results.iter().filter(|r| !r.passed).collect::<Vec<_>>()
+        result
+            .results
+            .iter()
+            .filter(|r| !r.passed)
+            .collect::<Vec<_>>()
     );
     assert_eq!(result.suite_name, "token");
     assert_eq!(result.total, 4);
@@ -569,10 +584,8 @@ fn framework_custom_test_case() {
         "This test always passes",
         |env| {
             let start = std::time::Instant::now();
-            env.storage.set(
-                StorageKey::instance("flag"),
-                serde_json::json!(true),
-            );
+            env.storage
+                .set(StorageKey::instance("flag"), serde_json::json!(true));
             let assertions = ContractAssertions::new(env)
                 .storage_eq(StorageKey::instance("flag"), serde_json::json!(true))
                 .finish();
