@@ -133,6 +133,14 @@ pub enum TemplateCommands {
         #[arg(long, short, conflicts_with = "name")]
         all: bool,
     },
+    /// Generate Markdown documentation for a template from its registry metadata
+    Docs {
+        /// Template name
+        name: String,
+        /// Write the docs to this file instead of printing to stdout
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 pub async fn handle(cmd: TemplateCommands) -> Result<()> {
@@ -202,6 +210,7 @@ pub async fn handle(cmd: TemplateCommands) -> Result<()> {
             force,
         } => install(source, name, version, force),
         TemplateCommands::Update { name, all } => update(name, all),
+        TemplateCommands::Docs { name, output } => docs(name, output),
     }
 }
 
@@ -731,5 +740,19 @@ fn update(name: Option<String>, all: bool) -> Result<()> {
     templates::update_installed_template(&name)?;
     println!();
     p::success(&format!("Template '{}' updated", name));
+    Ok(())
+}
+
+fn docs(name: String, output: Option<PathBuf>) -> Result<()> {
+    let entry = templates::get_template(&name)?;
+    let markdown = templates::generate_template_docs(&entry);
+
+    match output {
+        Some(path) => {
+            std::fs::write(&path, &markdown)?;
+            p::success(&format!("Documentation written to {}", path.display()));
+        }
+        None => println!("{}", markdown),
+    }
     Ok(())
 }

@@ -19,6 +19,61 @@ pub fn warn(msg: &str) {
     println!("{} {}", "⚠".yellow().bold(), msg);
 }
 
+/// Print a structured CLI error to stderr with context and recovery hints.
+///
+/// Output format:
+///
+/// ```text
+///
+///   ✗  Error: <message>
+///      Context: <context>      (optional, from anyhow chain)
+///
+///   What to try:
+///     → hint one
+///     → hint two
+///
+/// ```
+///
+/// # Arguments
+/// * `err`   – The `anyhow::Error` returned from a command.
+/// * `hints` – Zero or more recovery hint strings shown under "What to try:".
+///
+/// If `hints` is empty, a generic fallback is printed instead.
+pub fn cli_error(err: &anyhow::Error, hints: &[&str]) {
+    // Primary message (the outermost error in the anyhow chain)
+    eprintln!("\n  {} {}\n", "✗  Error:".red().bold(), err);
+
+    // Walk the anyhow cause chain and print each context layer (skipping the
+    // root which was already printed above).
+    let chain: Vec<_> = err.chain().skip(1).collect();
+    if !chain.is_empty() {
+        for cause in &chain {
+            eprintln!("     {} {}", "Context:".dimmed(), cause.to_string().dimmed());
+        }
+        eprintln!();
+    }
+
+    // Recovery hints
+    eprintln!("  {}", "What to try:".yellow().bold());
+    if hints.is_empty() {
+        eprintln!(
+            "   {} Run the command again with {} for more detail",
+            "→".cyan(),
+            "--verbose".bright_white()
+        );
+        eprintln!(
+            "   {} Check {} for known issues",
+            "→".cyan(),
+            "https://github.com/Nanle-code/StarForge/issues".bright_white()
+        );
+    } else {
+        for hint in hints {
+            eprintln!("   {} {}", "→".cyan(), hint);
+        }
+    }
+    eprintln!();
+}
+
 pub fn header(msg: &str) {
     println!("\n{}", msg.bright_white().bold().underline());
 }
