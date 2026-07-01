@@ -1,4 +1,6 @@
 use crate::utils::{config, confirmation, horizon, optimizer, print as p, soroban, wallet_signer};
+use crate::commands::analytics as analytics_cmds;
+
 use anyhow::Result;
 use clap::Args;
 use colored::*;
@@ -497,6 +499,27 @@ pub async fn handle(args: DeployArgs) -> Result<()> {
             update_status(&record_id, DeployStatus::Failed, Some(stderr.clone()))?;
             p::error(&format!("Stellar CLI deployment failed: {}", stderr));
 
+            // Record deployment analytics event (execute attempt failed).
+            // Try to parse a contract id, even though the command failed.
+            let contract_id_for_analytics = parse_contract_id_from_stdout(&stderr);
+            let _ = analytics_cmds::handle(analytics_cmds::AnalyticsCommands::Track(
+                analytics_cmds::TrackArgs {
+                    contract_id: contract_id_for_analytics.unwrap_or_default(),
+
+
+                    network: args.network.clone(),
+                    wasm_hash: Some(wasm_hash.clone()),
+                    deployer: Some(wallet.name.clone()),
+                    fee_stroops: None,
+                    tx_hash: None,
+                    label: Some("stellar-cli".to_string()),
+                    duration_secs: None,
+                    success: false,
+                    error: Some(stderr.clone()),
+                },
+            )) ;
+
+
             // Automatic rollback safety net: revert to the last good deployment.
             handle_failed_deploy_rollback(
                 args.no_auto_rollback,
@@ -509,11 +532,30 @@ pub async fn handle(args: DeployArgs) -> Result<()> {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut parsed_contract_id: Option<String> = None;
         if let Some(contract_id) = parse_contract_id_from_stdout(&stdout) {
             set_contract_id(&record_id, &contract_id)?;
             p::kv("Contract ID", &contract_id);
+            parsed_contract_id = Some(contract_id.to_string());
         }
         update_status(&record_id, DeployStatus::Success, None)?;
+
+        // Record deployment analytics event (execute attempt succeeded).
+        let _ = analytics_cmds::handle(analytics_cmds::AnalyticsCommands::Track(
+            analytics_cmds::TrackArgs {
+                contract_id: parsed_contract_id.clone().unwrap_or_default(),
+                network: args.network.clone(),
+                wasm_hash: Some(wasm_hash.clone()),
+                deployer: Some(wallet.name.clone()),
+                fee_stroops: None,
+                tx_hash: None,
+                label: Some("stellar-cli".to_string()),
+                duration_secs: None,
+                success: true,
+                error: None,
+            },
+        ));
+
 
         p::success("Deployment executed successfully!");
         p::kv("Recorded deployment", &record_id[..8.min(record_id.len())]);
