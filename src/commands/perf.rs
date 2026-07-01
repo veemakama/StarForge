@@ -1,8 +1,9 @@
-use crate::utils::{performance as perf, print as p};
+use crate::utils::{contract_profiler, performance as perf, print as p};
 use anyhow::Result;
 use clap::Subcommand;
-use std::collections::HashMap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum PerfCommands {
@@ -151,6 +152,23 @@ pub async fn handle(cmd: PerfCommands) -> Result<()> {
 
 #[derive(Subcommand)]
 pub enum AdvancedPerfCommands {
+    /// Profile a compiled Soroban WASM artifact
+    Profile {
+        /// Path to the compiled contract WASM
+        wasm: PathBuf,
+        /// Human-readable contract label for reports
+        #[arg(long)]
+        label: Option<String>,
+        /// Previous JSON profile to compare against for regression detection
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        /// JSON report output path; defaults to the StarForge profile store
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Optional HTML dashboard output path
+        #[arg(long)]
+        dashboard: Option<PathBuf>,
+    },
     /// Advanced performance analysis with bottleneck detection
     Analyze {
         /// Contract ID
@@ -195,11 +213,143 @@ pub enum AdvancedPerfCommands {
 
 pub async fn handle_advanced(cmd: AdvancedPerfCommands) -> Result<()> {
     match cmd {
+        AdvancedPerfCommands::Profile {
+            wasm,
+            label,
+            baseline,
+            output,
+            dashboard,
+        } => profile_contract(wasm, label, baseline, output, dashboard),
         AdvancedPerfCommands::Analyze { contract, network } => analyze(contract, network),
-        AdvancedPerfCommands::DetectRegression { contract, period_hours, network } => detect_regression(contract, period_hours, network),
-        AdvancedPerfCommands::Compare { contract, hours_back, network } => compare(contract, hours_back, network),
-        AdvancedPerfCommands::GenerateDashboard { contract, network } => generate_dashboard(contract, network),
+        AdvancedPerfCommands::DetectRegression {
+            contract,
+            period_hours,
+            network,
+        } => detect_regression(contract, period_hours, network),
+        AdvancedPerfCommands::Compare {
+            contract,
+            hours_back,
+            network,
+        } => compare(contract, hours_back, network),
+        AdvancedPerfCommands::GenerateDashboard { contract, network } => {
+            generate_dashboard(contract, network)
+        }
     }
+}
+
+fn profile_contract(
+    wasm: PathBuf,
+    label: Option<String>,
+    baseline: Option<PathBuf>,
+    output: Option<PathBuf>,
+    dashboard: Option<PathBuf>,
+) -> Result<()> {
+    p::header("Contract Performance Profile");
+    p::separator();
+    p::kv("WASM", &wasm.display().to_string());
+    if let Some(label) = &label {
+        p::kv("Label", label);
+    }
+    if let Some(baseline) = &baseline {
+        p::kv("Baseline", &baseline.display().to_string());
+    }
+    p::separator();
+
+    let report =
+        contract_profiler::profile_contract_wasm(&wasm, label.as_deref(), baseline.as_deref())?;
+
+    println!();
+    p::info("Execution Time Analysis");
+    p::kv(
+        "Est. instructions",
+        &report.execution.estimated_instruction_count.to_string(),
+    );
+    p::kv(
+        "Est. CPU gas",
+        &report.execution.estimated_cpu_gas.to_string(),
+    );
+    p::kv(
+        "Est. invocation",
+        &format!("{:.2}ms", report.execution.estimated_invocation_time_ms),
+    );
+    if !report.execution.hot_sections.is_empty() {
+        p::kv("Hot sections", &report.execution.hot_sections.join(", "));
+    }
+
+    println!();
+    p::info("Memory Usage Tracking");
+    p::kv(
+        "Linear pages",
+        &report.memory.linear_memory_pages.to_string(),
+    );
+    p::kv(
+        "Static bytes",
+        &report.memory.estimated_static_bytes.to_string(),
+    );
+    p::kv(
+        "Peak estimate",
+        &format!("{} bytes", report.memory.estimated_peak_bytes),
+    );
+
+    println!();
+    p::info("Bottleneck Identification");
+    if report.bottlenecks.is_empty() {
+        p::success("No bottlenecks detected");
+    } else {
+        for bottleneck in &report.bottlenecks {
+            p::warn(&format!(
+                "{} [{:?}] {}",
+                bottleneck.kind, bottleneck.severity, bottleneck.metric
+            ));
+            println!("  {}", bottleneck.description);
+            println!("  Recommendation: {}", bottleneck.recommendation);
+        }
+    }
+
+    if let Some(comparison) = &report.comparison {
+        println!();
+        p::info("Performance Regression Detection");
+        p::kv("Verdict", &comparison.verdict);
+        p::kv("Gas delta", &format!("{:+.2}%", comparison.gas_delta_pct));
+        p::kv(
+            "Execution delta",
+            &format!("{:+.2}%", comparison.execution_time_delta_pct),
+        );
+        p::kv(
+            "Memory delta",
+            &format!("{:+.2}%", comparison.memory_delta_pct),
+        );
+    }
+
+    println!();
+    p::info("Performance Dashboard");
+    p::kv("Profile ID", &report.id);
+    p::kv(
+        "Estimated gas",
+        &report.dashboard_summary.total_estimated_gas.to_string(),
+    );
+    p::kv(
+        "Regression",
+        &report.dashboard_summary.regression_detected.to_string(),
+    );
+    for action in &report.dashboard_summary.next_actions {
+        println!("  - {}", action);
+    }
+
+    let json_path = if let Some(path) = output {
+        contract_profiler::write_profile_report(&report, &path)?;
+        path
+    } else {
+        contract_profiler::save_profile_report(&report)?
+    };
+    p::success(&format!("JSON profile written to {}", json_path.display()));
+
+    if let Some(path) = dashboard {
+        contract_profiler::write_dashboard_html(&report, &path)?;
+        p::success(&format!("HTML dashboard written to {}", path.display()));
+    }
+
+    Ok(())
 }
 
 fn analyze(contract: String, network: String) -> Result<()> {
@@ -213,8 +363,14 @@ fn analyze(contract: String, network: String) -> Result<()> {
 
     println!();
     p::info("Bottleneck Analysis Results");
-    p::kv("Overall Score", &format!("{:.1}/100", analysis.overall_score));
-    p::kv("Memory Leaks Detected", &analysis.memory_leaks_detected.to_string());
+    p::kv(
+        "Overall Score",
+        &format!("{:.1}/100", analysis.overall_score),
+    );
+    p::kv(
+        "Memory Leaks Detected",
+        &analysis.memory_leaks_detected.to_string(),
+    );
 
     if !analysis.bottleneck_operations.is_empty() {
         println!();
@@ -269,7 +425,11 @@ fn detect_regression(contract: String, period_hours: u64, network: String) -> Re
         }
     }
 
-    let regression_count = report.regression_points.iter().filter(|r| r.regression_detected).count();
+    let regression_count = report
+        .regression_points
+        .iter()
+        .filter(|r| r.regression_detected)
+        .count();
     if regression_count > 0 {
         println!();
         p::warn(&format!("{} regression points detected:", regression_count));
@@ -345,18 +505,46 @@ fn generate_dashboard(contract: String, network: String) -> Result<()> {
 
     println!();
     p::info("═══ EXECUTION SUMMARY ═══");
-    p::kv("Total Executions", &dashboard.summary.total_executions.to_string());
-    p::kv("Avg Gas Used", &format!("{:.0}", dashboard.summary.avg_gas_used));
-    p::kv("Max Gas Used", &format!("{:.0}", dashboard.summary.max_gas_used));
-    p::kv("Avg Execution Time", &format!("{:.1}ms", dashboard.summary.avg_execution_time_ms));
-    p::kv("Success Rate", &format!("{:.1}%", dashboard.summary.success_rate));
+    p::kv(
+        "Total Executions",
+        &dashboard.summary.total_executions.to_string(),
+    );
+    p::kv(
+        "Avg Gas Used",
+        &format!("{:.0}", dashboard.summary.avg_gas_used),
+    );
+    p::kv(
+        "Max Gas Used",
+        &format!("{:.0}", dashboard.summary.max_gas_used),
+    );
+    p::kv(
+        "Avg Execution Time",
+        &format!("{:.1}ms", dashboard.summary.avg_execution_time_ms),
+    );
+    p::kv(
+        "Success Rate",
+        &format!("{:.1}%", dashboard.summary.success_rate),
+    );
 
     println!();
     p::info("═══ BOTTLENECK ANALYSIS ═══");
-    p::kv("Overall Score", &format!("{:.1}/100", dashboard.bottleneck_analysis.overall_score));
-    p::kv("Memory Leaks Detected", &dashboard.bottleneck_analysis.memory_leaks_detected.to_string());
-    
-    if !dashboard.bottleneck_analysis.bottleneck_operations.is_empty() {
+    p::kv(
+        "Overall Score",
+        &format!("{:.1}/100", dashboard.bottleneck_analysis.overall_score),
+    );
+    p::kv(
+        "Memory Leaks Detected",
+        &dashboard
+            .bottleneck_analysis
+            .memory_leaks_detected
+            .to_string(),
+    );
+
+    if !dashboard
+        .bottleneck_analysis
+        .bottleneck_operations
+        .is_empty()
+    {
         p::warn("Frequent Operations:");
         for op in &dashboard.bottleneck_analysis.bottleneck_operations {
             println!("  • {}", op);
@@ -371,9 +559,18 @@ fn generate_dashboard(contract: String, network: String) -> Result<()> {
 
     println!();
     p::info("═══ REGRESSION DETECTION ═══");
-    p::kv("Baseline Avg", &format!("{:.0}", dashboard.regression_report.baseline_avg));
-    p::kv("Current Avg", &format!("{:.0}", dashboard.regression_report.current_avg));
-    p::kv("Change", &format!("{:+.1}%", dashboard.regression_report.regression_percentage));
+    p::kv(
+        "Baseline Avg",
+        &format!("{:.0}", dashboard.regression_report.baseline_avg),
+    );
+    p::kv(
+        "Current Avg",
+        &format!("{:.0}", dashboard.regression_report.current_avg),
+    );
+    p::kv(
+        "Change",
+        &format!("{:+.1}%", dashboard.regression_report.regression_percentage),
+    );
     for trend in &dashboard.regression_report.trends {
         if trend.contains("increased") {
             p::warn(&format!("  ⚠ {}", trend));
@@ -386,7 +583,11 @@ fn generate_dashboard(contract: String, network: String) -> Result<()> {
 
     println!();
     p::info("═══ PERFORMANCE COMPARISON ═══");
-    if !dashboard.comparison_report.performance_differences.is_empty() {
+    if !dashboard
+        .comparison_report
+        .performance_differences
+        .is_empty()
+    {
         for (metric, diff) in &dashboard.comparison_report.performance_differences {
             let label = metric.replace('_', " ");
             if *diff > 0.0 {
@@ -406,9 +607,17 @@ fn generate_dashboard(contract: String, network: String) -> Result<()> {
         println!();
         p::warn("Configured Alerts:");
         for alert in &dashboard.alerts {
-            println!("  • {} {} {} ({})", alert.metric_name, 
-                if matches!(alert.direction, perf::AlertDirection::Above) { ">" } else { "<" },
-                alert.threshold, alert.message);
+            println!(
+                "  • {} {} {} ({})",
+                alert.metric_name,
+                if matches!(alert.direction, perf::AlertDirection::Above) {
+                    ">"
+                } else {
+                    "<"
+                },
+                alert.threshold,
+                alert.message
+            );
         }
     }
 

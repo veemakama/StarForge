@@ -192,6 +192,32 @@ Coverage analysis tracks Soroban contract functions, line spans, branch paths, u
 
 ---
 
+## `advanced-perf`
+
+| Subcommand | Purpose |
+|------------|---------|
+| `advanced-perf profile <WASM>` | Profile a compiled Soroban contract artifact |
+| `advanced-perf profile <WASM> --baseline <JSON>` | Detect gas, execution-time, or memory regressions against a saved profile |
+| `advanced-perf profile <WASM> --dashboard <HTML>` | Generate a local performance dashboard |
+| `advanced-perf analyze <CONTRACT>` | Analyze recorded runtime metrics for bottlenecks |
+| `advanced-perf detect-regression <CONTRACT>` | Detect regressions from recorded metric history |
+| `advanced-perf compare <CONTRACT>` | Compare recorded profiles across time windows |
+| `advanced-perf generate-dashboard <CONTRACT>` | Show the recorded-metrics performance dashboard |
+
+```bash
+starforge advanced-perf profile ./target/wasm32-unknown-unknown/release/token.wasm \
+  --label token --dashboard ./target/token-profile.html
+
+starforge advanced-perf profile ./target/wasm32-unknown-unknown/release/token.wasm \
+  --baseline ~/.starforge/contract_profiles/profile-abc123def456.json \
+  --output ./target/token-profile.json
+```
+
+The artifact profiler reports estimated execution time, memory usage, bottlenecks,
+baseline regression detection, comparison deltas, and a dashboard summary.
+
+---
+
 ## `security`
 
 | Subcommand | Purpose |
