@@ -188,6 +188,17 @@ enum Commands {
     /// Execute an installed plugin command (e.g. `starforge defi ...`)
     #[command(external_subcommand)]
     External(Vec<String>),
+
+    // in the Commands enum, after the Upgrade variant:
+    /// Contract storage migration tools (transform, validate, rollback)
+    #[command(subcommand)]
+    Migrate(commands::migrate::MigrateCommands),
+
+    // in the command_name match:
+    Commands::Migrate(_) => "migrate",
+
+    // in the result dispatch match:
+    Commands::Migrate(cmd) => commands::migrate::handle(cmd),
 }
 
 #[tokio::main]

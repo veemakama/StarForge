@@ -19,6 +19,7 @@ pub mod info;
 pub mod inspect;
 pub mod invoke;
 pub mod lint;
+pub mod migrate;
 pub mod monitor;
 pub mod multisig_builder;
 pub mod network;
