@@ -56,8 +56,14 @@ pub struct PerformanceSummary {
     pub max_gas_used: f64,
     pub min_gas_used: f64,
     pub avg_execution_time_ms: f64,
+    /// Average memory usage captured by caller (bytes)
+    pub avg_memory_used_bytes: Option<f64>,
+    /// Max memory usage captured by caller (bytes)
+    pub max_memory_used_bytes: Option<f64>,
     pub success_rate: f64,
 }
+
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertTrigger {
@@ -74,8 +80,11 @@ pub struct GasUsageRecord {
     pub timestamp: String,
     pub success: bool,
     pub execution_time_ms: u64,
+    /// Optional memory usage captured by the caller (bytes)
+    pub memory_used: Option<u64>,
     pub network: String,
 }
+
 
 fn metrics_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
@@ -718,8 +727,10 @@ mod tests {
                 gas_used: (i * 1000 + 500) as u64,
                 timestamp: (base_time + chrono::Duration::seconds(i as i64)).to_rfc3339(),
                 success: i % 5 != 0,
-                execution_time_ms: (i * 100 + 100) as u64,
+            execution_time_ms: (i * 100 + 100) as u64,
+                memory_used: None,
                 network: "testnet".to_string(),
+
             };
             record_gas_usage(&record).unwrap();
         }

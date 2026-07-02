@@ -18,6 +18,10 @@ pub enum PerfCommands {
         /// Execution time in milliseconds
         #[arg(long)]
         time_ms: Option<u64>,
+        /// Memory usage (bytes) observed during execution (best-effort from caller)
+        #[arg(long)]
+        memory_bytes: Option<u64>,
+
         /// Whether the execution succeeded
         #[arg(long, default_value = "true")]
         success: bool,
@@ -118,9 +122,13 @@ pub async fn handle(cmd: PerfCommands) -> Result<()> {
             operation,
             gas,
             time_ms,
+            memory_bytes,
             success,
             network,
-        } => record(contract, operation, gas, time_ms, success, network),
+        } => record(contract, operation, gas, time_ms, memory_bytes, success, network),
+
+
+
         PerfCommands::Dashboard { contract, network } => dashboard(contract, network),
         PerfCommands::History { contract, limit } => history(contract, limit),
         PerfCommands::Alert {
@@ -422,10 +430,14 @@ fn record(
     operation: String,
     gas: u64,
     time_ms: Option<u64>,
+    memory_bytes: Option<u64>,
     success: bool,
     network: String,
 ) -> Result<()> {
     p::header("Performance Metrics — Record");
+
+
+
 
     let record = perf::GasUsageRecord {
         contract_id: contract.clone(),
@@ -434,8 +446,11 @@ fn record(
         timestamp: chrono::Utc::now().to_rfc3339(),
         success,
         execution_time_ms: time_ms.unwrap_or(0),
+        memory_used: memory_bytes,
         network,
+
     };
+
 
     perf::record_gas_usage(&record)?;
 
@@ -445,7 +460,11 @@ fn record(
     if let Some(t) = time_ms {
         p::kv("Execution Time", &format!("{}ms", t));
     }
+    if let Some(m) = memory_bytes {
+        p::kv("Memory Used", &format!("{} bytes", m));
+    }
     p::kv("Success", &success.to_string());
+
     Ok(())
 }
 
