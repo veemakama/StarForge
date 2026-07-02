@@ -25,6 +25,45 @@ regression comparisons.
 
 ---
 
+## Contract performance profiling
+
+Use `advanced-perf profile` when you need an artifact-level profile for a
+compiled Soroban contract:
+
+```bash
+starforge advanced-perf profile ./target/wasm32-unknown-unknown/release/my_contract.wasm \
+  --label my-contract \
+  --dashboard ./target/starforge-profile.html
+```
+
+The profiler records:
+
+- execution time analysis using estimated instruction count, CPU gas, and hot
+  WASM sections;
+- memory usage tracking using linear memory pages, static section bytes, and an
+  estimated peak memory footprint;
+- bottleneck identification from gas findings, instruction density, memory
+  pressure, and high estimated gas cost;
+- a JSON profile report under `~/.starforge/contract_profiles/` unless
+  `--output <path>` is supplied;
+- an optional HTML dashboard when `--dashboard <path>` is supplied.
+
+To detect a performance regression, compare the candidate artifact with a saved
+profile:
+
+```bash
+starforge advanced-perf profile ./target/wasm32-unknown-unknown/release/my_contract.wasm \
+  --label my-contract \
+  --baseline ~/.starforge/contract_profiles/profile-abc123def456.json \
+  --output ./target/candidate-profile.json
+```
+
+A regression is flagged when estimated gas, invocation time, or peak memory grows
+by more than 10 percent over the baseline. Keep the latest accepted profile as
+the next baseline so pull requests can compare performance consistently.
+
+---
+
 ## Benchmark groups
 
 | Group | Description |
