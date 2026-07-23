@@ -163,8 +163,41 @@ impl TestCaseGenerator {
         // Parse function signatures
         for (line_num, line) in content.lines().enumerate() {
             if line.trim_start().starts_with("pub fn ") {
-                let test = self.generate_test_from_function(line, line_num, file_path)?;
-                tests.push(test);
+                let base = self.generate_test_from_function(line, line_num, file_path)?;
+                for (suffix, description, tags, priority) in [
+                    (
+                        "happy_path",
+                        "Normal operation with valid generated inputs",
+                        vec!["happy_path"],
+                        TestPriority::High,
+                    ),
+                    (
+                        "error_conditions",
+                        "Rejected input and failure-state behavior",
+                        vec!["error_condition", "input_validation"],
+                        TestPriority::High,
+                    ),
+                    (
+                        "boundary_conditions",
+                        "Minimum, maximum, zero, and empty input boundaries",
+                        vec!["boundary_condition"],
+                        TestPriority::Medium,
+                    ),
+                    (
+                        "security",
+                        "Authorization, state isolation, and replay resistance",
+                        vec!["security", "authorization"],
+                        TestPriority::Critical,
+                    ),
+                ] {
+                    let mut test = base.clone();
+                    test.id = format!("{}_{}", test.id, suffix);
+                    test.name = format!("{} {}", test.name, suffix.replace('_', " "));
+                    test.description = format!("{}: {}", test.description, description);
+                    test.tags.extend(tags.into_iter().map(String::from));
+                    test.priority = priority;
+                    tests.push(test);
+                }
             }
         }
 
@@ -189,12 +222,49 @@ impl TestCaseGenerator {
             name: format!("Test {}", function_name),
             description: format!("Auto-generated test for function {}", function_name),
             function_name,
-            input_params: vec![],
+            input_params: parse_input_params(line),
             expected_output: None,
             tags: vec!["generated".to_string(), "unit".to_string()],
             priority: TestPriority::Medium,
         })
     }
+}
+
+fn parse_input_params(signature: &str) -> Vec<TestParam> {
+    let Some(parameters) = signature
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+    else {
+        return Vec::new();
+    };
+
+    parameters
+        .0
+        .split(',')
+        .filter_map(|parameter| {
+            let (name, param_type) = parameter.split_once(':')?;
+            let name = name.trim().trim_start_matches("mut ").trim();
+            if name.is_empty() || name == "env" {
+                return None;
+            }
+            let param_type = param_type.trim();
+            Some(TestParam {
+                name: name.to_string(),
+                value: sample_parameter(param_type),
+                param_type: param_type.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn sample_parameter(param_type: &str) -> String {
+    match param_type.replace(' ', "").as_str() {
+        "bool" => "true",
+        "u32" | "u64" | "i32" | "i64" => "1",
+        "Address" => "generated_test_address",
+        _ => "generated_input",
+    }
+    .to_string()
 }
 
 pub struct ParallelTestRunner {

@@ -1,4 +1,6 @@
-use crate::utils::{config, print as p, rollback_testing, test_automation, test_runner};
+use crate::utils::{
+    config, print as p, rollback_testing, test_automation, test_generator, test_runner,
+};
 use anyhow::Result;
 use clap::Args;
 use std::path::PathBuf;
@@ -261,8 +263,22 @@ pub async fn handle(args: TestArgs) -> Result<()> {
 
     // Handle automated test generation
     if args.generate {
+        let source = args.source.as_ref().expect("source checked above");
+        p::info("Generating comprehensive contract test cases...");
+        let generated = test_generator::generate_from_source(source)?;
+
+        let project_path = args
+            .contract_path
+            .clone()
+            .or_else(|| source.parent().and_then(|path| path.parent()).map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let tests_dir = project_path.join("tests");
+        std::fs::create_dir_all(&tests_dir)?;
+        let generated_path = tests_dir.join("starforge_generated.rs");
+        test_generator::write_generated_tests(&generated, &generated_path)?;
+        p::kv("Rust tests saved", &generated_path.display().to_string());
+
         if let Some(contract_path) = &args.contract_path {
-            p::info("Generating automated test cases...");
             let generator = test_automation::TestCaseGenerator::new(contract_path.clone());
             let suite = generator.generate_from_contract()?;
 
@@ -273,6 +289,8 @@ pub async fn handle(args: TestArgs) -> Result<()> {
             let json = serde_json::to_string_pretty(&suite)?;
             std::fs::write(&suite_path, json)?;
             p::kv("Test suite saved", &suite_path.display().to_string());
+        } else {
+            p::success(&format!("Generated {} test cases", generated.cases.len()));
         }
     }
 

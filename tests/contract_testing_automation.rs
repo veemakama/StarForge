@@ -1,5 +1,5 @@
 use starforge::utils::test_coverage::analyze_source_coverage;
-use starforge::utils::test_generator::generate_from_source;
+use starforge::utils::test_generator::{generate_from_source, write_generated_tests};
 use starforge::utils::test_runner::{run_contract_tests, TestOptions};
 use std::io::Write;
 use tempfile::{NamedTempFile, TempDir};
@@ -92,4 +92,47 @@ fn generated_tests_include_auth_cases() {
 
     assert!(!result.generated_cases.is_empty());
     assert!(result.coverage.is_some());
+}
+
+#[test]
+fn generated_suite_covers_required_scenarios_and_input_data() {
+    let source = r#"
+#[contractimpl]
+impl Counter {
+    pub fn set_value(env: Env, value: u32, enabled: bool) -> u32 { value }
+}
+"#;
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(source.as_bytes()).unwrap();
+
+    let result = generate_from_source(file.path()).unwrap();
+    let scenario_types = result
+        .cases
+        .iter()
+        .map(|case| case.test_type.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(result.cases.len(), 4);
+    assert!(scenario_types.contains("happy_path"));
+    assert!(scenario_types.contains("error_condition"));
+    assert!(scenario_types.contains("boundary_condition"));
+    assert!(scenario_types.contains("security"));
+    assert_eq!(result.cases[0].input_data.len(), 2);
+    assert_eq!(result.cases[0].input_data[0].rust_type, "u32");
+    assert_eq!(result.cases[3].security_checks.len(), 3);
+}
+
+#[test]
+fn generated_rust_tests_have_no_placeholder_todos() {
+    let mut source = NamedTempFile::new().unwrap();
+    source.write_all(SAMPLE_SOURCE.as_bytes()).unwrap();
+    let result = generate_from_source(source.path()).unwrap();
+
+    let output = NamedTempFile::new().unwrap();
+    write_generated_tests(&result, output.path()).unwrap();
+    let generated = std::fs::read_to_string(output.path()).unwrap();
+
+    assert!(generated.contains("#[test]"));
+    assert!(generated.contains("test_increment_security"));
+    assert!(!generated.contains("TODO"));
 }
